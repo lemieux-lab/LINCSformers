@@ -1,11 +1,16 @@
 # version #2 :)
 
 using Pkg
-Pkg.activate("/home/golem/scratch/chans/lincsv3")
+if Sys.ARCH == :aarch64 || Sys.ARCH == :arm64
+    Pkg.activate("/home/golem/scratch/chans/lincsv3/aarch64")
+else
+    Pkg.activate("/home/golem/scratch/chans/lincsv3")
+end
+Pkg.instantiate()
 
 using DataFrames, Dates, StatsBase, JLD2
 using LincsProject
-using Flux, Random, ProgressBars, CUDA, Statistics, CairoMakie, LinearAlgebra, MultivariateStats
+using Flux, Random, ProgressBars, CUDA, Statistics, CairoMakie, LinearAlgebra, MultivariateStats, Zygote
 
 include("../../src/params.jl")
 include("../../src/fxns.jl")
@@ -18,8 +23,8 @@ CUDA.device!(0)
 data_path = "data/lincs_untrt_data.jld2"
 dataset = "untrt"
 n_epochs = 1
-batch_size = 200
-lr = lr * 2
+batch_size = 140 # 21 mins, 128 untrt
+# lr = lr * 2
 
 start_time = now()
 
@@ -45,8 +50,8 @@ function PosEnc(embed_dim::Int, max_len::Int)
     return PosEnc(pe_matrix)
 end
 
-Flux.@functor PosEnc
-Flux.trainable(pe::PosEnc) = ()
+Flux.@layer PosEnc
+Flux.trainable(pe::PosEnc) = NamedTuple()
 
 function (pe::PosEnc)(input::AbstractArray)
     seq_len = size(input,2)
@@ -84,7 +89,7 @@ function Transf(
     return Transf(mha, att_dropout, att_norm, mlp, mlp_norm)
 end
 
-Flux.@functor Transf
+Flux.@layer Transf
 
 function (tf::Transf)(input) # input shape: embed_dim × seq_len × batch_size
     normed = tf.att_norm(input)
@@ -141,7 +146,7 @@ function Model(;
     return Model(embedding, pca_proj, pos_encoder, pos_dropout, transformer, classifier)
 end
 
-Flux.@functor Model
+Flux.@layer Model
 
 function (model::Model)(input, input_pca) # input: n,b input_pca: p,b
     embedded = model.embedding(input) # e,n,b
@@ -170,23 +175,37 @@ function (model::Model)(input, input_pca) # input: n,b input_pca: p,b
     return logits_output
 end
 
-function loss(model::Model, x, x_pca, y, mode::String)
-    logits = model(x, x_pca)
+# 130.452 ms (63236 allocations: 43.73 MiB) for the loss fxns below
 
-    logits_flat = reshape(logits, size(logits, 1), :) 
+function train_loss(model::Model, x, x_pca, y, n_classes)
+    logits = model(x, x_pca)
+    logits_flat = reshape(logits, size(logits, 1), :)
     y_flat = vec(y)
 
-    mask = y_flat .!= -100
+    # mask = Float32.((y_flat .!= -100) .& (y_flat .<= n_classes) .& (y_flat .> 0))
+    mask = (y_flat .!= -100) .& (y_flat .<= n_classes) .& (y_flat .> 0)
+    # mask = y_flat .!= Int32(-100)
+
     logits_masked = logits_flat[:, mask]
     y_masked = y_flat[mask]
+    
     y_oh = Flux.onehotbatch(y_masked, 1:n_classes)
+    return Flux.logitcrossentropy(logits_masked, y_oh)
+end
 
-    if mode == "train"
-        return Flux.logitcrossentropy(logits_masked, y_oh) 
-    end
-    if mode == "test"
-        return Flux.logitcrossentropy(logits_masked, y_oh), logits_masked, y_masked
-    end
+function test_loss(model::Model, x, x_pca, y, n_classes) 
+    logits = model(x, x_pca)
+    logits_flat = reshape(logits, size(logits, 1), :)
+    y_flat = vec(y)
+
+    mask = (y_flat .!= -100) .& (y_flat .<= n_classes) .& (y_flat .> 0)
+    # mask = y_flat .!= Int32(-100)
+
+    logits_masked = logits_flat[:, mask]
+    y_masked = y_flat[mask]
+
+    y_oh = Flux.onehotbatch(y_masked, 1:n_classes)
+    return Flux.logitcrossentropy(logits_masked, y_oh), logits_masked, y_masked
 end
 
 
@@ -196,8 +215,9 @@ end
 
 
 data = load(data_path)["filtered_data"]
-gene_medians = vec(median(data.expr, dims=2)) .+ 1e-10
-X = rank_genes(data.expr, gene_medians)
+data_expr = data.expr#[:, 1:10]
+gene_medians = vec(median(data_expr, dims=2)) .+ 1e-10
+X = rank_genes(data_expr, gene_medians)
 
 n_features = size(X, 1) + 1
 n_classes = size(X, 1)
@@ -245,10 +265,10 @@ for epoch in ProgressBar(1:n_epochs)
         y_gpu = gpu(y_train_masked[:, start_idx:end_idx])
         
         loss_val, grads = Flux.withgradient(model) do m
-            loss(m, x_gpu, x_pca, y_gpu, "train")
+            train_loss(m, x_gpu, x_pca, y_gpu, n_classes)
         end
         Flux.update!(opt, model, grads[1])
-        loss_val = loss(model, x_gpu, x_pca, y_gpu, "train")
+        # loss_val = loss(model, x_gpu, x_pca, y_gpu, "train")
         push!(epoch_losses, loss_val)
     end
     push!(train_losses, mean(epoch_losses))
@@ -265,7 +285,7 @@ for epoch in ProgressBar(1:n_epochs)
         x_pca = gpu(x_pca_cpu)
         y_gpu = gpu(y_test_masked[:, start_idx:end_idx])
 
-        test_loss_val, logits_masked, y_masked = loss(model, x_gpu, x_pca, y_gpu, "test")
+        test_loss_val, logits_masked, y_masked = test_loss(model, x_gpu, x_pca, y_gpu, n_classes)
         push!(test_epoch_losses, test_loss_val)
 
         if isempty(y_masked) continue end

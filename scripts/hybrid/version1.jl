@@ -1,11 +1,17 @@
 # version #1 :)
 
 using Pkg
-Pkg.activate("/home/golem/scratch/chans/lincsv3")
+if Sys.ARCH == :aarch64 || Sys.ARCH == :arm64
+    Pkg.activate("/home/golem/scratch/chans/lincsv3/aarch64")
+else
+    Pkg.activate("/home/golem/scratch/chans/lincsv3")
+end
+Pkg.instantiate()
 
 using DataFrames, Dates, StatsBase, JLD2
 using LincsProject
-using Flux, Random, ProgressBars, CUDA, Statistics, CairoMakie, LinearAlgebra, MultivariateStats
+using Flux, Random, ProgressBars, CUDA, Statistics, CairoMakie, LinearAlgebra, MultivariateStats, Zygote
+using BenchmarkTools
 
 include("../../src/params.jl")
 include("../../src/fxns.jl")
@@ -17,47 +23,12 @@ CUDA.device!(0)
 data_path = "data/lincs_untrt_data.jld2"
 dataset = "untrt"
 n_epochs = 1
-batch_size = 42 #1hr per epoch w/ 42
+batch_size = 600 # 1.5hr/epoch w/ 42 on untrt, 20mins/epoch w/ 600 on untrt
+lr = lr * 6
 
 start_time = now()
 data = load(data_path)["filtered_data"]
-raw_data = data.expr
 
-
-
-# ### pca exploration - just to visualize, but we should
-
-
-
-# max_cpts = 100
-# init_pca = fit(PCA, raw_data; maxoutdim=max_cpts)
-
-# vars = principalvars(init_pca)
-# totalvar = tprincipalvar(init_pca) + tresidualvar(init_pca)
-# ratio = vars ./ totalvar
-# cum_ratio = cumsum(ratio)
-
-# begin
-#     fig1 = Figure(size=(400,200))
-#     ax1 = Axis(fig1[1,1],
-#         xlabel = "Number of components",
-#         ylabel = "Cumulative variance"
-#     )
-#     barplot!(ax1, 1:length(cum_ratio), cum_ratio)
-#     display(fig1)
-#     save("/home/golem/scratch/chans/lincsv3/plots/trt/pca/cumvar.png", fig1)
-# end
-
-# begin
-#     fig2 = Figure(size=(400,200))
-#     ax2 = Axis(fig2[1,1],
-#         xlabel = "Number of componentse",
-#         ylabel = "% variance explained"
-#     )
-#     scatterlines!(ax2, 1:length(ratio), ratio)
-#     display(fig2)
-#     save("/home/golem/scratch/chans/lincsv3/plots/trt/pca/scree.png", fig2)
-# end
 
 
 ### model structure
@@ -81,8 +52,8 @@ function PosEnc(embed_dim::Int, max_len::Int)
     return PosEnc(pe_matrix)
 end
 
-Flux.@functor PosEnc
-Flux.trainable(pe::PosEnc) = ()
+Flux.@layer PosEnc
+Flux.trainable(pe::PosEnc) = NamedTuple()
 
 function (pe::PosEnc)(input::AbstractArray)
     seq_len = size(input,2)
@@ -120,7 +91,7 @@ function Transf(
     return Transf(mha, att_dropout, att_norm, mlp, mlp_norm)
 end
 
-Flux.@functor Transf
+Flux.@layer Transf
 
 function (tf::Transf)(input) # input shape: embed_dim × seq_len × batch_size
     normed = tf.att_norm(input)
@@ -151,7 +122,8 @@ struct Model{E,J,P,D,T,C}
     use_pca_proj::Bool 
 end
 
-Flux.@functor Model (embedding, pca_proj, pos_encoder, pos_dropout, transformer, classifier) 
+Flux.@layer Model
+    # [trainable = (embedding, transformer, classifier)] ??
 
 function Model(;
     input_size::Int,
@@ -193,60 +165,80 @@ function (model::Model)(input, input_pca)
     combined = cat(pca_reshaped, encoded_seq, dims=2) 
 
     encoded_dropped = model.pos_dropout(combined) 
-
     transformed = model.transformer(encoded_dropped)
-
     # cls = transformed[:,1,:]
     # logits_output = model.classifier(cls)
-
     logits_output = model.classifier(transformed)
-    
     return logits_output[:,2:end,:]
 end
 
-function loss(model::Model, x, x_pca, y, n_classes::Int, mode::String) 
-    logits = model(x, x_pca)
+# 130.452 ms (63236 allocations: 43.73 MiB) for the loss fxns below
 
-    logits_flat = reshape(logits, size(logits, 1), :) 
+function train_loss(model::Model, x, x_pca, y, n_classes)
+    logits = model(x, x_pca)
+    logits_flat = reshape(logits, size(logits, 1), :)
     y_flat = vec(y)
 
-    mask = y_flat .!= -100
+    # mask = Float32.((y_flat .!= -100) .& (y_flat .<= n_classes) .& (y_flat .> 0))
+    mask = (y_flat .!= -100) .& (y_flat .<= n_classes) .& (y_flat .> 0)
+    # mask = y_flat .!= Int32(-100)
+
     logits_masked = logits_flat[:, mask]
     y_masked = y_flat[mask]
-    y_oh = Flux.onehotbatch(y_masked, 1:n_classes)
 
-    if mode == "train"
-        return Flux.logitcrossentropy(logits_masked, y_oh) 
-    end
-    if mode == "test"
-        return Flux.logitcrossentropy(logits_masked, y_oh), logits_masked, y_masked
-    end
+    # Zygote.@ignore begin
+    #     y_cpu_masked = Array(y_masked)
+    #     tmp_idx = findall(val -> val > n_classes || val <= 0, y_cpu_masked)
+    #     if !isempty(tmp_idx)
+    #         println("# labels wrpmg: ", length(tmp_idx))
+    #         tmp_vals = unique(y_cpu_masked[tmp_idx])
+    #         println("invalid labels", tmp_vals)
+    #     end
+    # end
+    
+    y_oh = Flux.onehotbatch(y_masked, 1:n_classes)
+    return Flux.logitcrossentropy(logits_masked, y_oh)
 end
 
+function test_loss(model::Model, x, x_pca, y, n_classes) 
+    logits = model(x, x_pca)
+    logits_flat = reshape(logits, size(logits, 1), :)
+    y_flat = vec(y)
+
+    mask = (y_flat .!= -100) .& (y_flat .<= n_classes) .& (y_flat .> 0)
+    # mask = y_flat .!= Int32(-100)
+
+    logits_masked = logits_flat[:, mask]
+    y_masked = y_flat[mask]
+
+    y_oh = Flux.onehotbatch(y_masked, 1:n_classes)
+    return Flux.logitcrossentropy(logits_masked, y_oh), logits_masked, y_masked
+end
 
 
 ### let's actually do it~
 
 
-
-gene_medians = vec(median(data.expr, dims=2)) .+ 1e-10
-X = rank_genes(data.expr, gene_medians)
-
-X = X[:, 1:10]
+data_expr = data.expr#[:, 1:10]
+gene_medians = vec(median(data_expr, dims=2)) .+ 1e-10
+X = rank_genes(data_expr, gene_medians)
 
 n_features = size(X, 1) + 2
 n_classes = size(X, 1)
 n_genes = size(X, 1)
 MASK_ID = (n_classes + 1)
 
-X_train, X_test, train_indices, test_indices = split_data(X, 0.2)
-X_train_masked, y_train_masked = mask_input(X_train, mask_ratio, -100, MASK_ID, false)
-X_test_masked, y_test_masked = mask_input(X_test, mask_ratio, -100, MASK_ID, false)
+X_train, X_test, train_indices, test_indices = split_data(X, 0.2);
+X_train_masked, y_train_masked = mask_input(X_train, mask_ratio, -100, MASK_ID, false);
+X_test_masked, y_test_masked = mask_input(X_test, mask_ratio, -100, MASK_ID, false);
 
-raw_train = data.expr[:, train_indices] 
-raw_test = data.expr[:, test_indices] 
+y_train_masked = Int32.(y_train_masked);
+y_test_masked  = Int32.(y_test_masked);
 
-pca_train = fit(PCA, Float32.(raw_train); maxoutdim=embed_dim) 
+raw_train = data_expr[:, train_indices];
+raw_test = data_expr[:, test_indices] ;
+
+pca_train = fit(PCA, Float32.(raw_train); maxoutdim=embed_dim);
 
 model = Model(
     input_size=n_features,
@@ -272,85 +264,98 @@ all_trues = Int[]
 all_original_ranks = Int[]
 all_prediction_errors = Int[]
 
-for epoch in ProgressBar(1:n_epochs)
-    epoch_losses = Float32[]
-    for start_idx in 1:batch_size:size(X_train_masked, 2)
-        end_idx = min(start_idx + batch_size - 1, size(X_train_masked, 2))
+# function loop()
+    for epoch in ProgressBar(1:n_epochs)
+        epoch_losses = Float32[]
+        for start_idx in 1:batch_size:size(X_train_masked, 2)
+            end_idx = min(start_idx + batch_size - 1, size(X_train_masked, 2))
 
-        x_idx_cpu = X_train_masked[:, start_idx:end_idx]
-        raw_batch_cpu = raw_train[:, start_idx:end_idx] 
-        x_pca_cpu = predict(pca_train, raw_batch_cpu) 
-
-        x_gpu = gpu(X_train_masked[:, start_idx:end_idx])
-        x_pca = gpu(x_pca_cpu)
-        y_gpu = gpu(y_train_masked[:, start_idx:end_idx])
-        
-        loss_val, grads = Flux.withgradient(model) do m
-            loss(m, x_gpu, x_pca, y_gpu, n_classes, "train") 
-        end
-        Flux.update!(opt, model, grads[1])
-        push!(epoch_losses, loss_val)
-    end
-    push!(train_losses, mean(epoch_losses))
-
-    test_epoch_losses = Float32[]
-    epoch_rank_errors = Int[]
-    for start_idx in 1:batch_size:size(X_test_masked, 2)
-        end_idx = min(start_idx + batch_size - 1, size(X_test_masked, 2))
-
-        x_idx_cpu = X_test_masked[:, start_idx:end_idx]
-        raw_batch_cpu = raw_test[:, start_idx:end_idx] 
-        x_pca_cpu = predict(pca_train, raw_batch_cpu) 
-
-        x_gpu = gpu(X_test_masked[:, start_idx:end_idx])
-        x_pca = gpu(x_pca_cpu)
-        y_gpu = gpu(y_test_masked[:, start_idx:end_idx])
-
-        test_loss_val, logits_masked, y_masked = loss(model, x_gpu, x_pca, y_gpu, n_classes, "test") 
-        push!(test_epoch_losses, test_loss_val)
-
-        if isempty(y_masked) continue end
-
-        logits_cpu = cpu(logits_masked)
-        y_cpu = cpu(y_masked)
-        
-        if epoch == n_epochs
-            y_cpu_batch = cpu(y_gpu)
-            masked_indices_cartesian = findall(y_cpu_batch .!= -100)
-            original_ranks_in_batch = [idx[1] for idx in masked_indices_cartesian]
-        end
-
-        for i in 1:length(y_cpu)
-            true_gene_id = y_cpu[i]
-            prediction_logits = logits_cpu[:, i]
-            ranked_gene_ids = sortperm(prediction_logits, rev=true)
-            predicted_rank = findfirst(isequal(true_gene_id), ranked_gene_ids)
+            raw_batch_cpu = Float32.(raw_train[:, start_idx:end_idx])
             
-            if !isnothing(predicted_rank)
-                error = predicted_rank - 1
-                push!(epoch_rank_errors, error)
+            # use this instead of below line when debugging using a subset of the data (less sampels than emebd_dim)
+            # pca_out = predict(pca_train, raw_batch_cpu) 
+            # x_pca_cpu = zeros(Float32, embed_dim, size(raw_batch_cpu, 2))
+            # x_pca_cpu[1:size(pca_out, 1), :] .= pca_out
+
+            x_pca_cpu = predict(pca_train, raw_batch_cpu)
+
+            x_gpu = gpu(X_train_masked[:, start_idx:end_idx])
+            x_pca = gpu(x_pca_cpu)
+            y_gpu = gpu(y_train_masked[:, start_idx:end_idx])
+            
+            loss_val, grads = Flux.withgradient(model) do m
+                train_loss(m, x_gpu, x_pca, y_gpu, n_classes) 
+            end
+            Flux.update!(opt, model, grads[1])
+            push!(epoch_losses, loss_val)
+        end
+        push!(train_losses, mean(epoch_losses))
+
+        test_epoch_losses = Float32[]
+        epoch_rank_errors = Int[]
+        for start_idx in 1:batch_size:size(X_test_masked, 2)
+            end_idx = min(start_idx + batch_size - 1, size(X_test_masked, 2))
+
+            raw_batch_cpu = Float32.(raw_test[:, start_idx:end_idx])
+
+            # pca_out = predict(pca_train, raw_batch_cpu) 
+            # x_pca_cpu = zeros(Float32, embed_dim, size(raw_batch_cpu, 2))
+            # x_pca_cpu[1:size(pca_out, 1), :] .= pca_out
+
+            x_pca_cpu = predict(pca_train, raw_batch_cpu) 
+
+            x_gpu = gpu(X_test_masked[:, start_idx:end_idx])
+            x_pca = gpu(x_pca_cpu)
+            y_gpu = gpu(y_test_masked[:, start_idx:end_idx])
+
+            test_loss_val, logits_masked, y_masked = test_loss(model, x_gpu, x_pca, y_gpu, n_classes) 
+            push!(test_epoch_losses, test_loss_val)
+
+            if isempty(y_masked) continue end
+
+            logits_cpu = cpu(logits_masked)
+            y_cpu = cpu(y_masked)
+            
+            if epoch == n_epochs
+                y_cpu_batch = cpu(y_gpu)
+                masked_indices_cartesian = findall(y_cpu_batch .!= -100)
+                original_ranks_in_batch = [idx[1] for idx in masked_indices_cartesian]
+            end
+
+            for i in 1:length(y_cpu)
+                true_gene_id = y_cpu[i]
+                prediction_logits = logits_cpu[:, i]
+                ranked_gene_ids = sortperm(prediction_logits, rev=true)
+                predicted_rank = findfirst(isequal(true_gene_id), ranked_gene_ids)
                 
-                if epoch == n_epochs
-                    original_rank = original_ranks_in_batch[i] - 1
-                    push!(all_original_ranks, original_rank)
-                    push!(all_prediction_errors, error)
+                if !isnothing(predicted_rank)
+                    error = predicted_rank - 1
+                    push!(epoch_rank_errors, error)
+                    
+                    if epoch == n_epochs
+                        original_rank = original_ranks_in_batch[i] - 1
+                        push!(all_original_ranks, original_rank)
+                        push!(all_prediction_errors, error)
+                    end
                 end
             end
-        end
 
-        if epoch == n_epochs
-            predicted_ids = Flux.onecold(logits_masked)
-            append!(all_preds, cpu(predicted_ids))
-            append!(all_trues, y_cpu)
+            if epoch == n_epochs
+                predicted_ids = Flux.onecold(logits_masked)
+                append!(all_preds, cpu(predicted_ids))
+                append!(all_trues, y_cpu)
+            end
+        end
+        push!(test_losses, mean(test_epoch_losses))
+        if !isempty(epoch_rank_errors)
+            push!(test_rank_errors, mean(epoch_rank_errors))
+        else
+            push!(test_rank_errors, NaN32)
         end
     end
-    push!(test_losses, mean(test_epoch_losses))
-    if !isempty(epoch_rank_errors)
-        push!(test_rank_errors, mean(epoch_rank_errors))
-    else
-        push!(test_rank_errors, NaN32)
-    end
-end
+# end
+
+# @btime loop()
 
 timestamp = Dates.format(now(), "yyyy-mm-dd_HH-MM")
 save_dir = joinpath("plots", dataset, "rtf_v1", timestamp)
