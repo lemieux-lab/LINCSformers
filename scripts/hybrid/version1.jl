@@ -20,11 +20,14 @@ include("../../src/save.jl")
 
 CUDA.device!(0)
 
-data_path = "data/lincs_untrt_data.jld2"
-dataset = "untrt"
-n_epochs = 1
+# run-specific settings
+# data_path = "data/lincs_untrt_data.jld2"
+# dataset = "untrt"
+n_epochs = 50
 batch_size = 600 # 1.5hr/epoch w/ 42 on untrt, 20mins/epoch w/ 600 on untrt
 lr = lr * 6
+gpu_info = CUDA.name(device())
+additional_notes = "first long run test"
 
 start_time = now()
 data = load(data_path)["filtered_data"]

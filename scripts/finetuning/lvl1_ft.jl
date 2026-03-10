@@ -1,3 +1,5 @@
+# downstream task: cell line classification
+
 using Pkg
 Pkg.activate("/home/golem/scratch/chans/lincsv3")
 Pkg.Registry.add(RegistrySpec(url="git@github.com:lemieux-lab/LabRegistry.git"))
@@ -13,12 +15,11 @@ include("../src/fxns.jl")
 include("../src/plot.jl")
 include("../src/save.jl")
 
-# data_path = "data/lincs_untrt_data.jld2"
-# dataset = "untrt"
-# batch_size = 100
-
 start_time = now()
 CUDA.device!(0)
+gpu_info = CUDA.name(device())
+additional_notes = "ft 1ep test"
+# batch_size = 128
 
 # pretrained model struct for reconstruction
 
@@ -271,7 +272,7 @@ check against y labels;
 gradient updates weights inside classifier not tf;
 =#
 
-pt1_epochs = 5
+pt1_epochs = 1
 pt1_train_losses = Float32[]
 pt1_test_losses = Float32[]
 pt1_preds = Int[]
@@ -330,7 +331,7 @@ gradient updates both transformer and classifier weights;
 =#
 
 
-pt2_epochs = 20
+pt2_epochs = 1
 pt2_train_losses = Float32[]
 pt2_test_losses = Float32[]
 pt2_preds = Int[]

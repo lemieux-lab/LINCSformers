@@ -26,10 +26,6 @@ latent_3 = 246
 # latent_2 = 225
 # latent_3 = 150
 
-# notes
-gpu_info = "smaug"
-additional_notes = "5,20ep big finetuning run"
-
 # matrix types
 const IntMatrix2DType = Union{Array{Int64}, CuArray{Int32, 2}, CuMatrix{Int64}, DenseCuMatrix{Int64}}
 const Float32Matrix2DType = Union{Array{Float32}, CuArray{Float32, 2}}

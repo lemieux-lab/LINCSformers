@@ -16,11 +16,12 @@ include("../src/fxns.jl")
 include("../src/plot.jl")
 include("../src/save.jl")
 
+# run-specific settings
 n_epochs = 50
-batch_size = 600 # does LR need to be increased wrt batchsize increase? 
-lr = lr * 6
+batch_size = 64 # does LR need to be increased wrt batchsize increase? 
+# lr = lr * 6
 gpu_info = CUDA.name(device())
-additional_notes = "rtf 50ep run"
+additional_notes = "rtf 1ep run to test if working"
 
 
 CUDA.device!(0)
@@ -31,7 +32,7 @@ data = load(data_path)["filtered_data"]
 gene_medians = vec(median(data.expr, dims=2)) .+ 1e-10
 X = rank_genes(data.expr, gene_medians)
 
-# X = X[:, 1:10]
+X = X[:, 1:100]
 
 n_features = size(X, 1) + 2
 n_classes = size(X, 1)
@@ -285,6 +286,7 @@ for epoch in ProgressBar(1:n_epochs)
             append!(all_trues, y_cpu)
         end
     end
+    
     push!(test_losses, mean(test_epoch_losses))
     if !isempty(epoch_rank_errors)
         push!(test_rank_errors, mean(epoch_rank_errors))

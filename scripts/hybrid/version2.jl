@@ -20,11 +20,14 @@ include("../../src/save.jl")
 
 CUDA.device!(0)
 
-data_path = "data/lincs_untrt_data.jld2"
-dataset = "untrt"
-n_epochs = 1
-batch_size = 140 # 21 mins, 128 untrt
-# lr = lr * 2
+# run-specific settings
+# data_path = "data/lincs_untrt_data.jld2"
+# dataset = "untrt"
+n_epochs = 50
+batch_size = 600 # 21 mins, 128 untrt
+lr = lr * 6
+gpu_info = CUDA.name(device())
+additional_notes = "first long run test"
 
 start_time = now()
 
@@ -228,12 +231,12 @@ X_train, X_test, train_indices, test_indices = split_data(X, 0.2)
 X_train_masked, y_train_masked = mask_input(X_train, mask_ratio, -100, MASK_ID, false)
 X_test_masked, y_test_masked = mask_input(X_test, mask_ratio, -100, MASK_ID, false)
 
-pca_train = fit(PCA, Float32.(X_train); maxoutdim=64)
+pca_train = fit(PCA, Float32.(X_train); maxoutdim=embed_dim)
 
 model = Model(
     input_size=n_features,
     embed_dim=embed_dim,
-    pca_dim=64,
+    pca_dim=embed_dim,
     n_layers=n_layers,
     n_classes=n_classes,
     n_heads=n_heads,

@@ -1,5 +1,11 @@
 using Pkg
-Pkg.activate("/home/golem/scratch/chans/lincs")
+if Sys.ARCH == :aarch64 || Sys.ARCH == :arm64
+    Pkg.activate("/home/golem/scratch/chans/lincsv3/aarch64")
+else
+    Pkg.activate("/home/golem/scratch/chans/lincsv3")
+end
+# Pkg.Registry.add(RegistrySpec(url="git@github.com:lemieux-lab/LabRegistry.git"))
+Pkg.instantiate()
 
 using LincsProject, DataFrames, Dates, StatsBase, JLD2, MLUtils
 using Flux, Random, ProgressBars, CUDA, Statistics, CairoMakie, LinearAlgebra
