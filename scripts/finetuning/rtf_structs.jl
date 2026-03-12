@@ -32,7 +32,7 @@ function PosEnc(embed_dim::Int, max_len::Int)
 end
 
 Flux.@layer PosEnc
-Flux.trainable(pe::PosEnc) = ()
+Flux.trainable(pe::PosEnc) = NamedTuple()
 
 function (pe::PosEnc)(input::AbstractArray)
     seq_len = size(input,2)
