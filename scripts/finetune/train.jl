@@ -38,10 +38,10 @@ function train(epochs, train_losses, test_losses, preds, trues, loss)
             test_loss_val = Flux.logitcrossentropy(logits, y_gpu)
 
             if epoch == epochs
-                preds = Flux.onecold(cpu(logits))
-                trues = Flux.onecold(cpu(y_gpu))
-                append!(preds, preds)
-                append!(trues, trues)
+                batch_preds = Flux.onecold(cpu(logits))
+                batch_trues = Flux.onecold(cpu(y_gpu))
+                append!(preds, batch_preds)
+                append!(trues, batch_trues)
             end
         end
         push!(test_losses, mean(test_epoch_losses))

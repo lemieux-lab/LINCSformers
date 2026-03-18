@@ -2,7 +2,7 @@ using Pkg
 Pkg.activate("/home/golem/scratch/chans/lincsv3")
 Pkg.instantiate()
 
-using LincsProject, JLD2, HDF5, CSV, DataFrames
+using LincsProject, JLD2, HDF5, CSV, DataFrames, ProgressBars
 
 # holy moly this is for level 3 downstream task
 
@@ -26,7 +26,7 @@ function get_inferred(prefix::String, gctx::String, filtered_data::Lincs, out_fi
     n_samples = length(target_col_idx)
     y_target = Matrix{Float32}(undef, n_inf, n_samples)
 
-    for (i, col_idx) in enumerate(target_col_idx)
+    for (i, col_idx) in ProgressBar(enumerate(target_col_idx))
         full_col = ptr_mat[:, col_idx] 
         y_target[:, i] = full_col[inf_row_idx] 
     end
@@ -57,3 +57,8 @@ trt_untrt_data = load(data_path)["filtered_data"]
 trt_untrt_out = "$dir/lincs_trt_untrt_inferred_data.jld2"
 
 y_inf = get_inferred(loading_dir, lvl3_gctx, trt_untrt_data, trt_untrt_out)
+
+
+# check what they look like here:
+
+untrt_inf = load("/home/golem/scratch/chans/lincs/data/lincs_untrt_inferred_data.jld2")

@@ -13,7 +13,7 @@ include("train.jl")
 
 # settings
 
-level = "lvl3"
+level = "lvl1"
 modeltype = "rtf"
 include("$(modeltype)_structs.jl")
 if modeltype == "rtf"
@@ -159,6 +159,9 @@ jldsave(joinpath(save_dir, "pt1_predstrues.jld2");
 jldsave(joinpath(save_dir, "pt2_predstrues.jld2"); 
     all_preds = pt2_preds, 
     all_trues = pt2_trues)
+jldsave(joinpath(save_dir, "indices"); 
+    train = train_indices, 
+    test = test_indices)
 
 end_time = now()
 run_time = end_time - start_time
