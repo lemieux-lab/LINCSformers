@@ -145,7 +145,7 @@ Flux.@layer FTModel
 function FTModel(pt_model;
     embed_dim::Int,
     hidden_dim::Int,
-    n_classifications::Int,
+    n_classifications::Int
     )
     pretrained = (
         embedding = pt_model.embedding,
@@ -166,6 +166,7 @@ function (m::FTModel)(input)
     encoded = m.pretrained.pos_encoder(embedded)
     encoded_dropped = m.pretrained.pos_dropout(encoded)
     transformed = m.pretrained.transformer(encoded_dropped)
-    cls_token = transformed[:, 1, :]
-    return m.head(cls_token)
+    pooled = dropdims(mean(transformed, dims=2), dims=2)
+    # cls_token = transformed[:, 1, :]
+    return m.head(pooled)
 end

@@ -158,14 +158,15 @@ struct FTModel{P,H}
 end
 
 Flux.@layer FTModel
-
-function FTModel(pt_model;
-    embed_dim::Int,
-    hidden_dim::Int,
-    n_classifications::Int,
+function FTModel(pt_model; 
+    embed_dim::Int, 
+    hidden_dim::Int, 
+    n_classifications::Int
     )
     pretrained = (
         embedding = pt_model.embedding,
+        pca_proj = pt_model.pca_proj,
+        use_pca_proj = pt_model.use_pca_proj, 
         pos_encoder = pt_model.pos_encoder,
         pos_dropout = pt_model.pos_dropout,
         transformer = pt_model.transformer
@@ -174,15 +175,24 @@ function FTModel(pt_model;
         Flux.Dense(embed_dim => hidden_dim, gelu),
         Flux.Dropout(drop_prob),
         Flux.Dense(hidden_dim => n_classifications)
-        )
+    )
     return FTModel(pretrained, head)
 end
 
-function (m::FTModel)(input)
+function (m::FTModel)(input, input_pca)
     embedded = m.pretrained.embedding(input)
-    encoded = m.pretrained.pos_encoder(embedded)
+    
+    if m.pretrained.use_pca_proj 
+        processed_pca = m.pretrained.pca_proj(input_pca) 
+    else 
+        processed_pca = input_pca 
+    end 
+    pca_reshaped = reshape(processed_pca, size(processed_pca, 1), 1, size(processed_pca, 2)) 
+    combined = cat(pca_reshaped, embedded, dims=2) 
+    
+    encoded = m.pretrained.pos_encoder(combined)
     encoded_dropped = m.pretrained.pos_dropout(encoded)
     transformed = m.pretrained.transformer(encoded_dropped)
-    cls_token = transformed[:, 1, :]
-    return m.head(cls_token)
+    pooled = dropdims(mean(transformed, dims=2), dims=2)
+    return m.head(pooled)
 end

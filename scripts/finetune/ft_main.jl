@@ -76,16 +76,26 @@ y_oh = Flux.onehotbatch(y_ids, 1:n_classifications)
 n_genes = size(X, 1) 
 n_classes_pt = n_genes
 n_features_pt = n_classes_pt + 2 
-CLS_ID = n_features_pt 
+# CLS_ID = n_features_pt 
 
 gene_medians = vec(median(X, dims=2)) .+ 1e-10
 X_ranked = rank_genes(X, gene_medians)
-CLS_VECTOR = fill(Int32(CLS_ID), (1, size(X_ranked, 2)))
-X_input = vcat(CLS_VECTOR, X_ranked)
 
-X_train, X_test, train_indices, test_indices = split_data(X_input, 0.2)
+# CLS_VECTOR = fill(Int32(CLS_ID), (1, size(X_ranked, 2)))
+# X_input = vcat(CLS_VECTOR, X_ranked)
+
+# TODO: load in indices from pretraining
+X_train, X_test, train_indices, test_indices = split_data(X_ranked, 0.2)
 y_train = y_oh[:, train_indices]
 y_test = y_oh[:, test_indices]
+
+# pca stuff
+raw_train = X[:, train_indices]
+raw_test = X[:, test_indices]
+raw_train_norm = StatsBase.zscore(Float32.(raw_train), 2)
+raw_test_norm = StatsBase.zscore(Float32.(raw_test), 2)
+pca_train_norm = fit(PCA, Float32.(raw_train_norm); maxoutdim=embed_dim);
+
 
 state = load("$dir/model_state.jld2")["model_state"]
 general_model = (
