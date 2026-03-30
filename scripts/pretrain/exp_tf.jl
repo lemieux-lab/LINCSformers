@@ -8,16 +8,37 @@ end
 Pkg.instantiate()
 
 using LincsProject, DataFrames, Dates, StatsBase, JLD2
-using Flux, Random, ProgressBars, CUDA, Statistics, CairoMakie, LinearAlgebra
+using Flux, Random, ProgressBars, CUDA, Statistics, CairoMakie, LinearAlgebra, cuDNN
 
-include("../src/params.jl")
-include("../src/fxns.jl")
-include("../src/plot.jl")
-include("../src/save.jl")
+include("../../src/params.jl")
+include("../../src/fxns.jl")
+include("../../src/plot.jl")
+include("../../src/save.jl")
 
-CUDA.device!(3)
+# run-specific settings
+
+# data_path = "data/lincs_untrt_data.jld2"
+# dataset = "untrt"
+n_epochs = 50
+
+gpu_info = CUDA.name(device())
+if gpu_info == "NVIDIA GeForce GTX 1080 Ti"
+    batch_size = 42
+elseif gpu_info == "Tesla V100-SXM2-32GB"
+    batch_size = 128
+elseif gpu_info == "NVIDIA GH200 144G HBM3e"
+    batch_size = 600
+    lr = lr * 6
+else
+    # error("check ur gpu!!!")
+    batch_size = 128
+end
+
+additional_notes = "test run 1ep"
 
 start_time = now()
+CUDA.device!(0)
+
 data = load(data_path)["filtered_data"]
 
 X = data.expr
@@ -50,7 +71,7 @@ function PosEnc(embed_dim::Int, max_len::Int) # max_len is number of genes
             pe_matrix[i,pos] = cos(angle) # even indices
         end
     end
-    return PosEnc(cu(pe_matrix))
+    return PosEnc(pe_matrix)
 end
 
 Flux.@functor PosEnc
@@ -220,7 +241,7 @@ test_losses = Float32[]
 
 # Profile.Allocs.@profile sample_rate=1 begin
 for epoch in ProgressBar(1:n_epochs)
-
+    Flux.trainmode!(model)
     epoch_losses = Float32[]
 
     # # dynamic masking here (optional, kept as is)
@@ -229,8 +250,8 @@ for epoch in ProgressBar(1:n_epochs)
 
     for start_idx in 1:batch_size:size(X_train_masked, 2)
         end_idx = min(start_idx + batch_size - 1, size(X_train_masked, 2))
-        x_gpu = gpu(X_train_masked[:, start_idx:end_idx])
-        y_gpu = gpu(y_train_masked[:, start_idx:end_idx])
+        x_gpu = gpu(Float32.(X_train_masked[:, start_idx:end_idx]))
+        y_gpu = gpu(Float32.(y_train_masked[:, start_idx:end_idx]))
         
         loss_val, grads = Flux.withgradient(model) do m
             loss(m, x_gpu, y_gpu, "train")
@@ -242,12 +263,13 @@ for epoch in ProgressBar(1:n_epochs)
 
     push!(train_losses, mean(epoch_losses))
 
+    Flux.testmode!(model)
     test_epoch_losses = Float32[]
     
     for start_idx in 1:batch_size:size(X_test_masked, 2)
         end_idx = min(start_idx + batch_size - 1, size(X_test_masked, 2))
-        x_gpu = gpu(X_test_masked[:, start_idx:end_idx])
-        y_gpu = gpu(y_test_masked[:, start_idx:end_idx])
+        x_gpu = gpu(Float32.(X_test_masked[:, start_idx:end_idx]))
+        y_gpu = gpu(Float32.(y_test_masked[:, start_idx:end_idx]))
 
         test_loss_val, _, _ = loss(model, x_gpu, y_gpu, "test")
         push!(test_epoch_losses, test_loss_val)
@@ -296,12 +318,12 @@ mkpath(save_dir)
 
 plot_loss(n_epochs, train_losses, test_losses, save_dir, "mse")
 plot_hexbin(all_trues, all_preds, "expression", save_dir)
-plot_prediction_error(all_gene_indices, absolute_errors, save_dir)
+# plot_prediction_error(all_gene_indices, absolute_errors, save_dir)
 
-avg_errors = plot_mean_prediction_error(all_gene_indices, absolute_errors, save_dir)
-plot_sorted_mean_rediction_error(avg_errors, all_gene_indices, absolute_errors, save_dir)
+# avg_errors = plot_mean_prediction_error(all_gene_indices, absolute_errors, save_dir)
+# plot_sorted_mean_rediction_error(avg_errors, all_gene_indices, absolute_errors, save_dir)
 
-ranked_preds, ranked_trues = convert_exp_to_rank(X_test, all_trues, all_preds)
+ranked_preds, ranked_trues = convert_exp_to_rank(X_test, all_trues, all_preds, all_column_indices)
 cs, cp = plot_ranked_heatmap(ranked_trues, ranked_preds, save_dir, false)
 
 log_model(model, save_dir)
