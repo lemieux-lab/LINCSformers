@@ -1,0 +1,222 @@
+using Random, StatsBase, Flux, MultivariateStats, Statistics
+
+function rank_genes(expr, medians)
+    n, m = size(expr)
+    data_ranked = Matrix{Int32}(undef, size(expr)) 
+    normalized_col = Vector{Float32}(undef, n) 
+    sorted_ind_col = Vector{Int32}(undef, n)
+    
+    for j in 1:m
+        unsorted_expr_col = view(expr, :, j)
+        @. normalized_col = unsorted_expr_col / medians
+        sortperm!(sorted_ind_col, normalized_col, rev=true)
+        for i in 1:n
+            data_ranked[i, j] = sorted_ind_col[i]
+        end
+    end
+    return data_ranked
+end
+
+function split_data(X, test_ratio::Float64, y=nothing)
+    n = size(X, 2)
+    idx = shuffle(1:n)
+    test_n = floor(Int, n * test_ratio)
+    tst, trn = idx[1:test_n], idx[test_n+1:end]
+    
+    if isnothing(y)
+        return X[:, trn], X[:, tst], trn, tst
+    end
+    return X[:, trn], y[trn], X[:, tst], y[tst], trn, tst
+end
+
+function get_labels(data::Lincs, level::String)
+    X = data.expr
+    if level == "lvl1"
+        return X, data.inst.cell_mfc_name, 1:size(X, 2)
+    elseif level == "lvl2"
+        y = data.inst.pert_id
+        counts = countmap(y)
+        valid_labels = Set(k for (k, v) in counts if 500 < v < 20000)
+        
+        idx = findall(l -> l in valid_labels, y)
+        return X[:, idx], y[idx], idx
+    else
+        error("level '$level' undefined")
+    end
+end
+
+function dsplit(data::Lincs, level::String, modeltype::String)
+    X, y, orig_idx = get_labels(data, level)
+    
+    labels = unique(y)
+    n_classifications = length(labels)
+    ids = Dict(l => i for (i, l) in enumerate(labels))
+    y_oh = Flux.onehotbatch([ids[l] for l in y], 1:n_classifications)
+    n_genes = size(X, 1) 
+
+    X_train, X_test, train_indices, test_indices = split_data(X, 0.2)
+    y_train, y_test = y_oh[:, train_indices], y_oh[:, test_indices]
+
+    pca_info = nothing 
+
+    if modeltype != "mlp"
+        gene_medians = vec(median(X, dims=2)) .+ 1e-10
+        X_ranked = rank_genes(X, gene_medians)
+
+        pt_indices = load(joinpath(dir, "indices.jld2"))
+        idx_dict = Dict(orig_i => new_i for (new_i, orig_i) in enumerate(orig_idx))
+        
+        train_indices = filter!(x -> !isnothing(x), [get(idx_dict, i, nothing) for i in pt_indices["train_indices"]])
+        test_indices  = filter!(x -> !isnothing(x), [get(idx_dict, i, nothing) for i in pt_indices["test_indices"]])
+
+        X_train, X_test = X_ranked[:, train_indices], X_ranked[:, test_indices]
+        y_train, y_test = y_oh[:, train_indices], y_oh[:, test_indices]
+
+        if use_pca
+            raw_train = X[:, train_indices]
+            raw_test = X[:, test_indices]
+            pca_train_norm = fit(PCA, Float32.(data.expr[:, pt_indices["train_indices"]]); maxoutdim=embed_dim)
+            pca_info = (norm=pca_train_norm, raw_train=raw_train, raw_test=raw_test)
+        end
+    end
+
+    cidx_dict, cs = use_oversmpl ? oversmpl(y_train) : (nothing, nothing)
+
+    return X_train, X_test, y_train, y_test, train_indices, test_indices, n_genes, n_classifications, cidx_dict, cs, pca_info
+end
+
+function get_pooled(m, x, x_pca, m_type)
+    embedded = m.embedding(x)
+    
+    if m_type == "rtf"
+        encoded = m.pos_encoder(embedded)
+    elseif m_type == "v1"
+        processed_pca = m.use_pca_proj ? m.pca_proj(x_pca) : x_pca
+        pca_reshaped = reshape(processed_pca, size(processed_pca, 1), 1, size(processed_pca, 2))
+        combined = cat(pca_reshaped, embedded, dims=2)
+        encoded = m.pos_encoder(combined)
+    elseif m_type == "v2"
+        pca_embedded = m.pca_proj(x_pca)
+        pca_normed = m.pca_norm(pca_embedded)
+        pca_reshaped = reshape(pca_normed, size(pca_normed, 1), 1, size(pca_normed, 2))
+        combined = embedded .+ pca_reshaped
+        encoded = m.pos_encoder(combined)
+    end
+    
+    encoded_dropped = m.pos_dropout(encoded)
+    transformed = m.transformer(encoded_dropped)
+    return dropdims(mean(transformed, dims=2), dims=2)
+end
+
+function emb(dir, modeltype, X_train, X_test, pca_info, use_pca, batch_size, n_genes, n_classifications)
+    if modeltype == "mlp"
+        ft_model = Flux.Chain(
+            Flux.Dense(n_genes => hidden_dim, gelu),
+            Flux.LayerNorm(hidden_dim),
+            Flux.Dropout(drop_prob),
+            Flux.Dense(hidden_dim => n_classifications)
+        ) |> gpu
+        return ft_model, Float32.(X_train), Float32.(X_test)
+    end
+
+    state = load(joinpath(dir, "model_state.jld2"))["model_state"]
+    general_model = (
+        input_size=n_genes + 1, embed_dim=embed_dim, n_layers=n_layers,
+        n_classes=n_genes, n_heads=n_heads, hidden_dim=hidden_dim, dropout_prob=drop_prob
+    )
+
+    if modeltype == "rtf"
+        pt_model = Model(; general_model...) |> gpu
+    elseif modeltype == "v1"
+        pt_model = Model(; general_model..., pca_dim=embed_dim, use_pca_proj=false) |> gpu
+    elseif modeltype == "v2"
+        pt_model = Model(; general_model..., pca_dim=embed_dim) |> gpu
+    end
+    
+    Flux.loadmodel!(pt_model, state)
+    Flux.testmode!(pt_model)
+
+    function extract_embeds(X_ranked, raw_data)
+        embeds = []
+        n_samples = size(X_ranked, 2)
+        for i in 1:batch_size:n_samples
+            b_idx = i:min(i+batch_size-1, n_samples)
+            x_batch = gpu(Int32.(X_ranked[:, b_idx]))
+            
+            if use_pca && !isnothing(pca_info)
+                x_pca_batch = gpu(Float32.(MultivariateStats.predict(pca_info.norm, Float32.(raw_data[:, b_idx]))))
+                push!(embeds, cpu(get_pooled(pt_model, x_batch, x_pca_batch, modeltype)))
+            else
+                push!(embeds, cpu(get_pooled(pt_model, x_batch, nothing, modeltype)))
+            end
+        end
+        return hcat(embeds...)
+    end
+
+    train_input = extract_embeds(X_train, use_pca ? pca_info.raw_train : nothing)
+    test_input = extract_embeds(X_test, use_pca ? pca_info.raw_test : nothing)
+
+    ft_model = Flux.Chain(
+        Flux.Dense(embed_dim => hidden_dim, gelu),
+        Flux.LayerNorm(hidden_dim),
+        Flux.Dropout(drop_prob),
+        Flux.Dense(hidden_dim => n_classifications)
+    ) |> gpu
+
+    return ft_model, train_input, test_input
+end
+
+function oversmpl(y_train)
+    labels = Flux.onecold(cpu(y_train))
+    cidx_dict = Dict{Int, Vector{Int}}()
+    for (i, label) in enumerate(labels)
+        push!(get!(cidx_dict, label, Int[]), i)
+    end
+    return cidx_dict, collect(keys(cidx_dict))
+end
+
+function oversample_batch(class_dict, classes, b_size)
+    return [rand(class_dict[rand(classes)]) for _ in 1:b_size]
+end
+
+function mstate(dir)
+    state = load(joinpath(dir, "model_state.jld2"))["model_state"]
+    
+    general_model = (
+        input_size=979,
+        embed_dim=embed_dim,
+        n_layers=n_layers,
+        n_classes=978,
+        n_heads=n_heads,
+        hidden_dim=hidden_dim,
+        dropout_prob=drop_prob
+    )
+
+    if modeltype == "rtf"
+        pt_model = Model(; general_model...) |> gpu
+    elseif modeltype == "v1"
+        pt_model = Model(; general_model..., pca_dim=embed_dim, use_pca_proj=false) |> gpu
+    elseif modeltype == "v2"
+        pt_model = Model(; general_model..., pca_dim=embed_dim) |> gpu
+    else
+        error("Unknown modeltype: $modeltype")
+    end
+
+    Flux.loadmodel!(pt_model, state)
+
+    ft_model = FTModel(pt_model;
+        embed_dim=embed_dim,
+        hidden_dim=hidden_dim,
+        n_classifications=n_classifications
+    ) |> gpu
+
+    if use_pca
+        X_pca_train = Float32.(MultivariateStats.predict(pca_train_norm, Float32.(raw_train)))
+        X_pca_test  = Float32.(MultivariateStats.predict(pca_train_norm, Float32.(raw_test)))
+    else
+        X_pca_train = nothing
+        X_pca_test = nothing
+    end
+    
+    return ft_model, X_pca_train, X_pca_test
+end

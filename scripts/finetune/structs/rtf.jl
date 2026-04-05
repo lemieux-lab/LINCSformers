@@ -1,18 +1,3 @@
-using Pkg
-Pkg.activate("/home/golem/scratch/chans/lincsv3")
-Pkg.instantiate()
-
-using LincsProject, JLD2, Flux, Optimisers, ProgressBars, Statistics, CUDA, Dates
-
-include("../../src/params.jl")
-include("../../src/fxns.jl")
-include("../../src/plot.jl")
-include("../../src/save.jl")
-
-
-# pretrained model struct for reconstruction
-
-
 ### positional encoder
 struct PosEnc{A<:AbstractArray}
     pe_matrix::A
@@ -88,33 +73,26 @@ function (tf::Transf)(input) # input shape: embed_dim × seq_len × batch_size
 end
 
 ### full model as << ranked data --> token embedding --> position embedding --> transformer --> classifier head >>
-struct Model{E,J,P,D,T,C}
+struct Model{E,P,D,T,C}
     embedding::E
-    pca_proj::J
     pos_encoder::P
     pos_dropout::D
     transformer::T
     classifier::C
-    use_pca_proj::Bool 
 end
-
-Flux.@layer Model
-    # [trainable = (embedding, transformer, classifier)] ??
 
 function Model(;
     input_size::Int,
-    pca_dim::Int, 
     embed_dim::Int,
     n_layers::Int,
     n_classes::Int,
     n_heads::Int,
     hidden_dim::Int,
-    dropout_prob::Float64,
-    use_pca_proj::Bool
+    dropout_prob::Float64
     )
+
     embedding = Flux.Embedding(input_size => embed_dim)
-    pca_proj = Flux.Dense(pca_dim => embed_dim) 
-    pos_encoder = PosEnc(embed_dim, input_size + 1)
+    pos_encoder = PosEnc(embed_dim, input_size)
     pos_dropout = Flux.Dropout(dropout_prob)
     transformer = Flux.Chain(
         [Transf(embed_dim, hidden_dim; n_heads, dropout_prob) for _ in 1:n_layers]...
@@ -124,28 +102,18 @@ function Model(;
         Flux.LayerNorm(embed_dim),
         Flux.Dense(embed_dim => n_classes)
         )
-    return Model(embedding, pca_proj, pos_encoder, pos_dropout, transformer, classifier, use_pca_proj) 
+    return Model(embedding, pos_encoder, pos_dropout, transformer, classifier)
 end
 
-function (model::Model)(input, input_pca)
+Flux.@layer Model
+
+function (model::Model)(input)
     embedded = model.embedding(input)
-    encoded_seq = model.pos_encoder(embedded) 
-
-    if model.use_pca_proj 
-        processed_pca = model.pca_proj(input_pca) 
-    else 
-        processed_pca = input_pca 
-    end 
-
-    pca_reshaped = reshape(processed_pca, size(processed_pca, 1), 1, size(processed_pca, 2)) 
-    combined = cat(pca_reshaped, encoded_seq, dims=2) 
-
-    encoded_dropped = model.pos_dropout(combined) 
+    encoded = model.pos_encoder(embedded)
+    encoded_dropped = model.pos_dropout(encoded)
     transformed = model.transformer(encoded_dropped)
-    # cls = transformed[:,1,:]
-    # logits_output = model.classifier(cls)
     logits_output = model.classifier(transformed)
-    return logits_output[:,2:end,:]
+    return logits_output
 end
 
 
@@ -158,15 +126,14 @@ struct FTModel{P,H}
 end
 
 Flux.@layer FTModel
-function FTModel(pt_model; 
-    embed_dim::Int, 
-    hidden_dim::Int, 
+
+function FTModel(pt_model;
+    embed_dim::Int,
+    hidden_dim::Int,
     n_classifications::Int
     )
     pretrained = (
         embedding = pt_model.embedding,
-        pca_proj = pt_model.pca_proj,
-        use_pca_proj = pt_model.use_pca_proj, 
         pos_encoder = pt_model.pos_encoder,
         pos_dropout = pt_model.pos_dropout,
         transformer = pt_model.transformer
@@ -175,24 +142,16 @@ function FTModel(pt_model;
         Flux.Dense(embed_dim => hidden_dim, gelu),
         Flux.Dropout(drop_prob),
         Flux.Dense(hidden_dim => n_classifications)
-    )
+        )
     return FTModel(pretrained, head)
 end
 
-function (m::FTModel)(input, input_pca)
+function (m::FTModel)(input)
     embedded = m.pretrained.embedding(input)
-    
-    if m.pretrained.use_pca_proj 
-        processed_pca = m.pretrained.pca_proj(input_pca) 
-    else 
-        processed_pca = input_pca 
-    end 
-    pca_reshaped = reshape(processed_pca, size(processed_pca, 1), 1, size(processed_pca, 2)) 
-    combined = cat(pca_reshaped, embedded, dims=2) 
-    
-    encoded = m.pretrained.pos_encoder(combined)
+    encoded = m.pretrained.pos_encoder(embedded)
     encoded_dropped = m.pretrained.pos_dropout(encoded)
     transformed = m.pretrained.transformer(encoded_dropped)
     pooled = dropdims(mean(transformed, dims=2), dims=2)
+    # cls_token = transformed[:, 1, :]
     return m.head(pooled)
 end
