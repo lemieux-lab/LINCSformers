@@ -11,34 +11,18 @@ include("src/load_data.jl")
 include("src/save.jl")
 
 # settings
-args_dict = Dict{String, String}()
-for i in 1:2:(length(ARGS)-1)
-    key = lstrip(ARGS[i], '-')
-    val = ARGS[i+1]
-    args_dict[key] = val
-end
-for (key, val_str) in args_dict
-    sym = Symbol(key)
-    if hasproperty(config, sym)
-        T = Base.nonnothingtype(fieldtype(typeof(config), sym))
-        parsed_val = if T <: AbstractString
-            val_str
-        elseif T === Symbol
-            Symbol(val_str)
-        else
-            parse(T, val_str) 
-        end
-        setproperty!(config, sym, parsed_val)
-    else
-        println("check ur argument '--$key', ignored")
-    end
-end
+args = load_args()
+kwargs = Dict(Symbol(k) => v for (k, v) in args)
+config = Config(; kwargs...)
 
 use_pca = config.modeltype in ("v1", "v2")
 use_oversmpl = config.level == "lvl2"
+\
 include("structs/$(config.modeltype).jl")
 if config.model_dir == ""
-    dirs = Dict("rtf"=>"rank_tf/2026-03-24_02-55", "v1"=>"rtf_v1/2026-03-31_22-35", "v2"=>"rtf_v2/2026-03-31_08-46")
+    dirs = Dict("rtf"=>"rank_tf/2026-03-24_02-55", 
+                "v1"=>"rtf_v1/2026-03-31_22-35", 
+                "v2"=>"rtf_v2/2026-03-31_08-46")
     config.model_dir = "/home/golem/scratch/chans/lincsv3/plots/trt/$(dirs[config.modeltype])"
 end
 
@@ -65,8 +49,8 @@ opt = Flux.setup(Optimisers.Adam(config.lr), model)
 
 data_set = (X_train=X_train, ytrain=y_train, X_test=X_test, y_test=y_test, pca_train=X_pca_train, pca_test=X_pca_test)
 
-pt1_epochs = config.pt1_epochs
-pt2_epochs = config.pt2_epochs
+pt1_epochs = floor(0.1*config.n_epochs)
+pt2_epochs = floor(0.9*config.n_epochs)
 
 # pt1: gradient updates weights inside classifier not tf
 logs_pt1 = (train_losses=Float32[], test_losses=Float32[], preds=Int[], trues=Int[])
@@ -90,6 +74,7 @@ run_time = now() - start_time
 total_minutes = div(run_time.value, 60000)
 
 log_params(save_dir; gpu=gpu_info, pt1_epochs=pt1_epochs, pt2_epochs=pt2_epochs, dataset=config.dataset, 
-            batch_size=config.batch_size, notes=config.additional_notes, 
-            run_time="$(div(total_minutes, 60))h $(rem(total_minutes, 60))m", 
+            batch_size=config.batch_size, drop_prob=config.drop_prob, lr=config.lr, mask_ratio=config.mask_ratio,
+            embed_dim=config.embed_dim, hidden_dim=config.hidden_dim, n_heads=config.n_heads, n_layers=config.n_layers,
+            notes=config.additional_notes, run_time="$(div(total_minutes, 60))h $(rem(total_minutes, 60))m", 
             pt1_accuracy=acc_pt1, pt2_accuracy=acc_pt2)

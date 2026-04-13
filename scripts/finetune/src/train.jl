@@ -62,9 +62,8 @@ function train_epoch!(model, opt, X_train, ytrain, pca_train, loss,
         lv, grads = Flux.withgradient(model) do m
             loss(m, x_gpu, x_pca, y_gpu, use_pca)
         end
-        
-        Flux.update!(opt, model, grads[1])
         lv = loss(model, x_gpu, x_pca, y_gpu, use_pca)
+        Flux.update!(opt, model, grads[1])
         push!(epoch_losses, Float32(cpu(lv)))
     end
     return mean(epoch_losses)

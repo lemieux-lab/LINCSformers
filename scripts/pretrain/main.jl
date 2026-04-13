@@ -1,5 +1,6 @@
 # using Pkg
 # Pkg.activate("/home/golem/scratch/chans/lincsv3")
+# TODO: do aarch pkg in sbatch file, make sure ArgParse is in the pkg manager for this via interactive run on balrog first
 
 using DataFrames, Dates, StatsBase, JLD2, LincsProject
 using Flux, Random, ProgressBars, CUDA, cuDNN, Statistics, CairoMakie, LinearAlgebra, MultivariateStats
@@ -11,28 +12,10 @@ include("src/plot.jl")
 include("src/save.jl")
 
 # run-specific settings #TODO: is there an easier way to write this function?
-args_dict = Dict{String, String}()
-for i in 1:2:(length(ARGS)-1)
-    key = lstrip(ARGS[i], '-')
-    val = ARGS[i+1]
-    args_dict[key] = val
-end
-for (key, val_str) in args_dict
-    sym = Symbol(key)
-    if hasproperty(config, sym)
-        T = Base.nonnothingtype(fieldtype(typeof(config), sym))
-        parsed_val = if T <: AbstractString
-            val_str
-        elseif T === Symbol
-            Symbol(val_str)
-        else
-            parse(T, val_str) 
-        end
-        setproperty!(config, sym, parsed_val)
-    else
-        println("check ur argument '--$key', ignored")
-    end
-end
+args = load_args()
+kwargs = Dict(Symbol(k) => v for (k, v) in args)
+config = Config(; kwargs...)
+
 if haskey(args_dict, "modeltype")
     mode_map = Dict("rtf" => :none, "v1" => :concat, "v2" => :add)
     config.pca_mode = mode_map[config.modeltype]

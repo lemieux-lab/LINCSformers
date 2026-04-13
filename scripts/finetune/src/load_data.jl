@@ -1,4 +1,42 @@
-using Random, StatsBase, Flux, MultivariateStats, Statistics, JLD2
+using Random, StatsBase, Flux, MultivariateStats, Statistics, JLD2, ArgParse
+
+function load_args()
+    s = ArgParseSettings()
+    @add_arg_table s begin
+        "--mode", "-m"
+            help = "ft mode: e2e or emb"
+            arg_type = String
+            required = true
+        "--level", "-l"
+            help = "level of finetuning: lvl1 or lvl2"
+            arg_type = String
+            required = true
+        "--n_epochs", "-e"
+            help = "number of epochs total"
+            arg_type = Int
+            default = 1
+            required = true
+        "--modeltype", "-t"
+            help = "model type: rtf, mlp, v1, or v2"
+            arg_type = String
+            required = true
+        "--dataset", "-d"
+            help = "dataset: trt or untrt"
+            arg_type = String
+            default = "trt"
+            required = false
+        "--batch_size", "-b"
+            help = "batchsize"
+            arg_type = Int
+            default = 64
+            required = false
+        "--note", "-n"
+            help = "run-specific notes"
+            arg_type = String
+            required = false
+    end
+    return parse_args(s)
+end
 
 function rank_genes(expr, medians)
     n, m = size(expr)
@@ -112,16 +150,14 @@ function emb(config::Config, X_train, X_test, pca_info, use_pca, n_genes, n_clas
             Flux.Dense(n_genes => config.hidden_dim, gelu),
             Flux.LayerNorm(config.hidden_dim),
             Flux.Dropout(config.drop_prob),
-            Flux.Dense(config.hidden_dim => n_classifications)
-        ) |> gpu
+            Flux.Dense(config.hidden_dim => n_classifications)) |> gpu
         return ft_model, Float32.(X_train), Float32.(X_test)
     end
 
     state = load(joinpath(config.model_dir, "model_state.jld2"))["model_state"]
-    general_model = (
-        input_size=n_genes + 1, embed_dim=config.embed_dim, n_layers=config.n_layers,
-        n_classes=n_genes, n_heads=config.n_heads, hidden_dim=config.hidden_dim, dropout_prob=config.drop_prob
-    )
+    general_model = (input_size=n_genes + 1, embed_dim=config.embed_dim, n_layers=config.n_layers,
+                        n_classes=n_genes, n_heads=config.n_heads, hidden_dim=config.hidden_dim, 
+                        dropout_prob=config.drop_prob)
 
     if config.modeltype == "rtf"
         pt_model = Model(; general_model...) |> gpu
@@ -167,10 +203,9 @@ end
 function mstate(config::Config, pca_info, use_pca, n_classifications)
     state = load(joinpath(config.model_dir, "model_state.jld2"))["model_state"]
     
-    general_model = (
-        input_size=979, embed_dim=config.embed_dim, n_layers=config.n_layers,
-        n_classes=978, n_heads=config.n_heads, hidden_dim=config.hidden_dim, dropout_prob=config.drop_prob
-    )
+    general_model = (input_size=979, embed_dim=config.embed_dim, n_layers=config.n_layers,
+                        n_classes=978, n_heads=config.n_heads, hidden_dim=config.hidden_dim, 
+                        dropout_prob=config.drop_prob)
 
     if config.modeltype == "rtf"
         pt_model = Model(; general_model...) |> gpu
@@ -185,8 +220,7 @@ function mstate(config::Config, pca_info, use_pca, n_classifications)
     ft_model = FTModel(pt_model;
         embed_dim=config.embed_dim,
         hidden_dim=config.hidden_dim,
-        n_classifications=n_classifications
-    ) |> gpu
+        n_classifications=n_classifications) |> gpu
 
     if use_pca && !isnothing(pca_info)
         X_pca_train = Float32.(MultivariateStats.predict(pca_info.norm, Float32.(pca_info.raw_train)))

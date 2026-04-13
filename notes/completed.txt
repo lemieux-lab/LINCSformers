@@ -33,10 +33,10 @@ level 2
 
     with same mlp (emb extract)
 
-        rtf: /home/golem/scratch/chans/lincsv3/plots/trt/finetuning/lvl2/rtf/emb/2026-04-07_12-51
-        v1: 
-        v2: 
-        mlp: /home/golem/scratch/chans/lincsv3/plots/trt/finetuning/lvl2/mlp/emb/2026-04-07_13-06
+        rtf: /home/golem/scratch/chans/lincsv3/plots/trt/finetuning/lvl2/rtf/emb/2026-04-09_17-14 (acc: 0.33)
+        v1: /home/golem/scratch/chans/lincsv3/plots/trt/finetuning/lvl2/v1/emb/2026-04-09_17-14 (acc:0.28)
+        v2: /home/golem/scratch/chans/lincsv3/plots/trt/finetuning/lvl2/v2/emb/2026-04-09_17-14 (acc:0.31)
+        mlp: /home/golem/scratch/chans/lincsv3/plots/trt/finetuning/lvl2/mlp/emb/2026-04-09_17-14 (acc:0.25)
 
 
 

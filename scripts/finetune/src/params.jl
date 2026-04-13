@@ -2,6 +2,7 @@ Base.@kwdef mutable struct Config
     dataset::String = "trt"
     data_path::String = "data/lincs_trt_data.jld2"
     model_dir::String = ""
+    mode::String = ""
 
     level::String = "lvl2"
     batch_size::Int = 128
@@ -11,7 +12,7 @@ Base.@kwdef mutable struct Config
     cp_freq::Union{Int,Nothing} = nothing
 
     embed_dim::Int = 128
-    drop_prob::Float64 = 0.15
+    drop_prob::Float64 = 0.1
     lr::Float64 = 0.001
     mask_ratio::Float64 = 0.15
     hidden_dim::Int = 256
@@ -20,6 +21,5 @@ Base.@kwdef mutable struct Config
     modeltype::String = "mlp"
     pca_mode::Symbol = :none
 
-    additional_notes::String = "test"
+    note::String = "test"
 end
-config = Config()

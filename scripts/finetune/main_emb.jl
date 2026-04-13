@@ -11,32 +11,13 @@ include("src/load_data.jl")
 include("src/save.jl")
 
 # settings
-args_dict = Dict{String, String}()
-for i in 1:2:(length(ARGS)-1)
-    key = lstrip(ARGS[i], '-')
-    val = ARGS[i+1]
-    args_dict[key] = val
-end
-for (key, val_str) in args_dict
-    sym = Symbol(key)
-    if hasproperty(config, sym)
-        T = Base.nonnothingtype(fieldtype(typeof(config), sym))
-        parsed_val = if T <: AbstractString
-            val_str
-        elseif T === Symbol
-            Symbol(val_str)
-        else
-            parse(T, val_str) 
-        end
-        setproperty!(config, sym, parsed_val)
-    else
-        println("check ur argument '--$key', ignored")
-    end
-end
+args = load_args()
+kwargs = Dict(Symbol(k) => v for (k, v) in args)
+config = Config(; kwargs...)
 
 use_pca = config.modeltype in ("v1", "v2")
 use_oversmpl = config.level == "lvl2"
-if haskey(args_dict, "dataset")
+if haskey(kwargs, "dataset")
     config.data_path = "data/lincs_$(config.dataset)_data.jld2"
 end
 if config.modeltype != "mlp"
@@ -56,7 +37,7 @@ end
 
 CUDA.device!(0)
 gpu_info = CUDA.name(device())
-if !haskey(args_dict, "batch_size")
+if !haskey(kwargs, "batch_size")
     if gpu_info == "NVIDIA GeForce GTX 1080 Ti"
         config.batch_size = 64
     elseif gpu_info == "Tesla V100-SXM2-32GB"
@@ -113,5 +94,6 @@ save_run(save_dir, ft_model, config.n_epochs, train_indices, test_indices,
          logs_set.train_losses, logs_set.test_losses, logs_set.preds, logs_set.trues)
 
 log_params(save_dir; gpu=gpu_info, epochs=config.n_epochs, dataset=config.dataset, 
-           batch_size=config.batch_size, notes=config.additional_notes, 
+           batch_size=config.batch_size, drop_prob=config.drop_prob, lr=config.lr, 
+           notes=config.additional_notes, 
            run_time="$(run_hours)h $(run_minutes)m", accuracy=acc)

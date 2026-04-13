@@ -1,4 +1,42 @@
-using Flux, CUDA, StatsBase, Statistics, Random
+using Flux, CUDA, StatsBase, Statistics, Random, ArgParse
+
+function load_args()
+    s = ArgParseSettings()
+    @add_arg_table s begin
+        "--mode", "-m"
+            help = "ft mode: e2e or emb"
+            arg_type = String
+            required = true
+        "--level", "-l"
+            help = "level of finetuning: lvl1 or lvl2"
+            arg_type = String
+            required = true
+        "--n_epochs", "-e"
+            help = "number of epochs total"
+            arg_type = Int
+            default = 1
+            required = true
+        "--modeltype", "-t"
+            help = "model type: rtf, mlp, v1, or v2"
+            arg_type = String
+            required = true
+        "--dataset", "-d"
+            help = "dataset: trt or untrt"
+            arg_type = String
+            default = "trt"
+            required = false
+        "--batch_size", "-b"
+            help = "batchsize"
+            arg_type = Int
+            default = 64
+            required = false
+        "--note", "-n"
+            help = "run-specific notes"
+            arg_type = String
+            required = false
+    end
+    return parse_args(s)
+end
 
 function rank_genes(expr, medians)
     n, m = size(expr)

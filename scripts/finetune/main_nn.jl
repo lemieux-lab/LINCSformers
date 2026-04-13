@@ -12,28 +12,9 @@ include("src/load_data.jl")
 include("src/save.jl")
 
 # settings
-args_dict = Dict{String, String}()
-for i in 1:2:(length(ARGS)-1)
-    key = lstrip(ARGS[i], '-')
-    val = ARGS[i+1]
-    args_dict[key] = val
-end
-for (key, val_str) in args_dict
-    sym = Symbol(key)
-    if hasproperty(config, sym)
-        T = Base.nonnothingtype(fieldtype(typeof(config), sym))
-        parsed_val = if T <: AbstractString
-            val_str
-        elseif T === Symbol
-            Symbol(val_str)
-        else
-            parse(T, val_str) 
-        end
-        setproperty!(config, sym, parsed_val)
-    else
-        println("check ur argument '--$key', ignored")
-    end
-end
+args = load_args()
+kwargs = Dict(Symbol(k) => v for (k, v) in args)
+config = Config(; kwargs...)
 
 use_pca = false
 use_oversmpl = config.level == "lvl2"
@@ -60,16 +41,22 @@ X_train, X_test, y_train, y_test,
     clsdict, cls, pca_info = dsplit(data, config)
 
 model = Chain(
-    Dense(n_genes => 512, gelu),
-    LayerNorm(512),
+    Dense(n_genes => 750, gelu),
+    LayerNorm(750),
     Dropout(config.drop_prob),
-    Dense(512 => 256, gelu),
-    LayerNorm(256),
+    Dense(750 => 600, gelu),
+    LayerNorm(600),
     Dropout(config.drop_prob),
-    Dense(256 => n_classifications)
+    Dense(600 => 450, gelu),
+    LayerNorm(450),
+    Dropout(config.drop_prob),
+    Dense(450 => 300, gelu),
+    LayerNorm(300),
+    Dropout(config.drop_prob),
+    Dense(300 => n_classifications)
 ) |> gpu
 
-opt = Flux.setup(Optimisers.AdamW(config.lr), model)
+opt = Flux.setup(Optimisers.Adam(config.lr), model)
 
 data_set = (X_train = X_train, ytrain = y_train, X_test = X_test, y_test = y_test, pca_train = nothing, pca_test = nothing)
 
@@ -91,5 +78,6 @@ save_run(save_dir, model, config.n_epochs, train_indices, test_indices,
 
 log_params(save_dir; gpu=gpu_info, dataset=config.dataset, 
            batch_size=config.batch_size, epochs=config.n_epochs, 
+           drop_prob=config.drop_prob, lr=config.lr, 
            run_time="$(div(total_mins, 60))h $(rem(total_mins, 60))m", 
            accuracy=acc, notes=config.additional_notes)
