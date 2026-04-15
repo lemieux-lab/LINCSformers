@@ -27,11 +27,11 @@ gpu_info = CUDA.name(device())
 if !haskey(kwargs, "batch_size")
     if gpu_info == "NVIDIA GeForce GTX 1080 Ti"
         config.batch_size = 42
-    elseif gpu_info == "Tesla V100-SXM2-32GB"
+    elseif gpu_info ∈ ("Tesla V100-SXM2-32GB", "NVIDIA RTX 6000 Ada Generation")
         config.batch_size = 128
     elseif gpu_info == "NVIDIA GH200 144G HBM3e"
-        config.batch_size = 600
-        config.lr *= 6
+        config.batch_size = 500
+        config.lr *= 5
     else
         config.batch_size = 64
     end
@@ -42,7 +42,7 @@ CUDA.device!(0)
 start_time = now()
 
 data = load(config.data_path)["filtered_data"]
-data_expr = data.expr[:, 1:1000]
+data_expr = data.expr#[:, 1:1000]
 gene_medians = vec(median(data_expr, dims=2)) .+ 1e-10
 X = rank_genes(data_expr, gene_medians)
 
@@ -79,8 +79,37 @@ model = Model(
 
 opt = Flux.setup(Adam(config.lr), model)
 
-train_losses, test_losses, test_rank_errors = Float32[], Float32[], Float32[]
-final_preds, final_trues = Int[], Int[]
+base_save_dir = joinpath("plots", config.dataset, config.modeltype)
+latest_run_dir, latest_cp_file, latest_epoch = find_latest_checkpoint(base_save_dir)
+
+start_epoch = 1
+
+if latest_cp_file !== nothing && latest_epoch < config.n_epochs
+    println("resuming from checkpoint: $latest_cp_file")
+    
+    save_dir = latest_run_dir 
+    start_epoch = latest_epoch + 1
+    cp_data = load(latest_cp_file)
+
+    Flux.loadmodel!(model, cp_data["model_state"]) 
+    opt = cp_data["opt_state"] |> gpu
+    
+    train_losses = cp_data["train_losses"]
+    test_losses = cp_data["test_losses"]
+    test_rank_errors = cp_data["test_rank_errors"] 
+    
+    final_preds = cp_data["checkpt_preds"]
+    final_trues = cp_data["checkpt_trues"]
+
+else
+    println("starting new run...")
+    timestamp = Dates.format(now(), "yyyy-mm-dd_HH-MM")
+    save_dir = joinpath(base_save_dir, timestamp)
+    mkpath(save_dir)
+    
+    train_losses, test_losses, test_rank_errors = Float32[], Float32[], Float32[]
+    final_preds, final_trues = Int[], Int[]
+end
 
 # X_train_masked_gpu = gpu(Int.(X_train_masked))
 # y_train_masked_gpu = gpu(Int.(y_train_masked))
@@ -105,13 +134,25 @@ for epoch in ProgressBar(1:config.n_epochs)
         final_preds, final_trues = preds, trues
         final_original_ranks, final_prediction_errors = orig_ranks, pred_errs
     end
+
+    is_checkpt = (!isnothing(freq) && epoch % freq == 0) || is_final
+    if is_checkpt
+        cp_dir = joinpath(save_dir, "checkpts")
+        mkpath(cp_dir) 
+        path = joinpath(cp_dir, "epoch_$(epoch).jld2")
+        jldsave(path; 
+            model_state = Flux.state(cpu(model)),
+            model_object = cpu(model),
+            opt_state = cpu(opt), 
+            train_losses = train_losses, 
+            test_losses = test_losses, 
+            test_rank_errors = test_rank_errors,
+            checkpt_preds = preds, 
+            checkpt_trues = trues)
+    end
 end
 
 # log
-timestamp = Dates.format(now(), "yyyy-mm-dd_HH-MM")
-save_dir = joinpath("plots", config.dataset, config.modeltype, timestamp)
-mkpath(save_dir)
-
 plot_loss(config.n_epochs, train_losses, test_losses, save_dir, "logit-ce")
 plot_rank_error(config.n_epochs, test_rank_errors, save_dir)
 plot_hexbin(final_trues, final_preds, "gene id", save_dir)
@@ -124,6 +165,7 @@ log_model(model, save_dir)
 
 run_time = now() - start_time
 total_minutes = div(run_time.value, 60000)
+
 log_info(train_indices, test_indices, 
             nothing, config.n_epochs, 
             train_losses, test_losses, final_preds, 

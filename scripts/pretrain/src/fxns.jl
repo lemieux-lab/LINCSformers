@@ -30,6 +30,36 @@ function load_args()
     return parse_args(s)
 end
 
+function find_latest_checkpoint(base_dir)
+    
+    # get most recent timestamp
+    run_dirs = filter(isdir, readdir(base_dir, join=true))
+    if isempty(run_dirs)
+        return nothing, nothing, 0
+    end
+    sort!(run_dirs)
+    latest_run_dir = last(run_dirs)
+    
+    # check for checkpt dir
+    cp_dir = joinpath(latest_run_dir, "checkpts")
+    if !isdir(cp_dir)
+        return latest_run_dir, nothing, 0
+    end
+    
+    # get highest epoch checkpt file
+    cp_files = filter(f -> endswith(f, ".jld2") && startswith(basename(f), "epoch_"), readdir(cp_dir, join=true))
+    if isempty(cp_files)
+        return latest_run_dir, nothing, 0
+    end
+    
+    # get epoch number
+    get_epoch_num(f) = parse(Int, match(r"epoch_(\d+)\.jld2", basename(f))[1])
+    latest_cp_file = argmax(get_epoch_num, cp_files)
+    latest_epoch = get_epoch_num(latest_cp_file)
+    
+    return latest_run_dir, latest_cp_file, latest_epoch
+end
+
 function rank_genes(expr, medians)
     n, m = size(expr)
     data_ranked = Matrix{Int32}(undef, size(expr)) 
@@ -91,9 +121,12 @@ end
 function train_epoch(model, opt, X_masked, y_masked, raw_data, 
                     pca_gpu, mean_gpu, MASK_ID, n_classes, batch_size; 
                     mode=:train, is_final_epoch::Bool=false)
+
     epoch_losses = Float32[]
+
     all_preds, all_trues, epoch_rank_errors = Int[], Int[], Int[]
     all_original_ranks, all_prediction_errors = Int[], Int[] 
+
     mode == :train ? Flux.trainmode!(model) : Flux.testmode!(model)
     
     for start_idx in 1:batch_size:size(X_masked, 2)
@@ -104,38 +137,47 @@ function train_epoch(model, opt, X_masked, y_masked, raw_data,
         
         if pca_gpu !== nothing
             raw_batch = CuArray(raw_data[:, start_idx:end_idx])
-            x_raw_masked = (x_batch .!= MASK_ID) .* raw_batch
-            x_pca = pca_gpu * (x_raw_masked .- mean_gpu)
+            x_raw_masked = (x_batch .!= MASK_ID) .* raw_batch # masks pca data accordingly
+            x_pca = pca_gpu * (x_raw_masked .- mean_gpu) # center and project data to pca
         else
             x_pca = nothing
         end
         
         if mode == :train
+            # train
             l_val, grads = Flux.withgradient(model) do m
                 l, _, _ = masked_logitcrossentropy(m(x_batch, x_pca), y_batch, n_classes)
                 return l
-        end
+            end
             Flux.update!(opt, model, grads[1])
-            l_val = masked_logitcrossentropy(model(x_batch, x_pca), y_batch, n_classes)
+            # l_val = masked_logitcrossentropy(model(x_batch, x_pca), y_batch, n_classes)
             push!(epoch_losses, l_val)
-        else
+
+        else 
+            # test
             loss_val, logits_masked, y_targets = masked_logitcrossentropy(model(x_batch, x_pca), y_batch, n_classes)
             push!(epoch_losses, loss_val)
+
             if !isempty(y_targets)
                 logits_cpu = cpu(logits_masked)
                 y_targets_cpu = cpu(y_targets)
                 append!(all_trues, y_targets_cpu)
                 append!(all_preds, Flux.onecold(logits_cpu))
+                
+                # get original ranks
                 if is_final_epoch 
                     y_cpu_batch = cpu(y_batch)
                     midx = findall(y -> y != -100 && 0 < y <= n_classes, y_cpu_batch)
                     original_ranks_in_batch = [idx[1] for idx in midx]
                 end
+                
+                # rank errors
                 for i in 1:length(y_targets_cpu) 
                     target_id = y_targets_cpu[i]
                     target_logit = logits_cpu[target_id, i]
                     error = count(x -> x > target_logit, @view(logits_cpu[:, i]))
                     push!(epoch_rank_errors, error)
+
                     if is_final_epoch
                         push!(all_original_ranks, original_ranks_in_batch[i] - 1)
                         push!(all_prediction_errors, error)
@@ -144,5 +186,6 @@ function train_epoch(model, opt, X_masked, y_masked, raw_data,
             end
         end
     end
+
     return mean(epoch_losses), mean(epoch_rank_errors), all_preds, all_trues, all_original_ranks, all_prediction_errors
 end

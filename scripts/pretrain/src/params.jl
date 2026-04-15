@@ -5,7 +5,7 @@ Base.@kwdef mutable struct Config
 
     batch_size::Int = 128
     n_epochs::Int = 1
-    cp_freq::Union{Int,Nothing} = nothing
+    freq::Union{Int,Nothing} = 5
 
     embed_dim::Int = 128
     drop_prob::Float64 = 0.1
@@ -17,5 +17,6 @@ Base.@kwdef mutable struct Config
     modeltype::String = "mlp"
     pca_mode::Symbol = :none
 
+    wandb_mode::String = "offline"
     note::String = "test"
 end
