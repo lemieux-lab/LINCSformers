@@ -38,3 +38,16 @@ function log_params(save_dir; kwargs...)
         end
     end
 end
+
+function log_params(save_dir, config; kwargs...)
+    open(joinpath(save_dir, "params.log"), "w") do f
+        println(f, "=== PARAMETERS ===")
+        for prop in propertynames(config)
+            println(f, "$prop: $(getproperty(config, prop))")
+        end
+        println(f, "\n=== METRICS ===")
+        for (k, v) in kwargs
+            println(f, "$k: $v")
+        end
+    end
+end

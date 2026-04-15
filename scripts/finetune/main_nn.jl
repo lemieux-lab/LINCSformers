@@ -78,6 +78,7 @@ acc = sum(logs_set.preds .== logs_set.trues) / length(logs_set.trues)
 save_run(save_dir, model, config.n_epochs, train_indices, test_indices, 
          logs_set.train_losses, logs_set.test_losses, logs_set.preds, logs_set.trues)
 
-log_params(save_dir; gpu=gpu_info, epochs=config.n_epochs, dataset=config.dataset, 
-           batch_size=config.batch_size, drop_prob=config.drop_prob, lr=config.lr, 
-           notes=config.additional_notes, run_time="$(run_hours)h $(run_minutes)m", accuracy=acc)
+log_params(save_dir, config; 
+           gpu=gpu_info, 
+           run_time="$(run_hours)h $(run_minutes)m", 
+           accuracy=acc)

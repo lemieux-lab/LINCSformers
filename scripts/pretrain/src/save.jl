@@ -64,8 +64,8 @@ function log_tf_params(config, gpu_info, run_hours, run_minutes, save_dir)
     open(params_txt, "w") do io
         println(io, "PARAMETERS:")
         println(io, "########### $(gpu_info)")
-        for (k, v) in pairs(config)
-            println(io, "$k = $v")
+        for prop in propertynames(config)
+            println(io, "$prop = $(getproperty(config, prop))")
         end
         println(io, "run_time = $(run_hours) hours and $(run_minutes) minutes")
     end

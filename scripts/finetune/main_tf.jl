@@ -54,6 +54,8 @@ pt1_epochs = floor(0.1 * config.n_epochs)
 pt2_epochs = floor(0.9 * config.n_epochs)
 
 # pt1: gradient updates weights inside classifier not tf
+Optimisers.freeze!(opt.pretrained) 
+
 logs_pt1 = (train_losses=Float32[], test_losses=Float32[], preds=Int[], trues=Int[])
 train(model, opt, data_set, (epochs=pt1_epochs, batch_size=config.batch_size, loss=ce_loss, use_pca=use_pca, use_oversmpl=use_oversmpl, clsdict=clsdict, cls=cls, freq=config.cp_freq, save_dir=save_dir, pt="pt1"), logs_pt1)
 
@@ -77,8 +79,8 @@ total_minutes = div(run_time.value, 60000)
 run_hours = div(total_minutes, 60)
 run_minutes = rem(total_minutes, 60)
 
-log_params(save_dir; gpu=gpu_info, pt1_epochs=pt1_epochs, pt2_epochs=pt2_epochs, dataset=config.dataset, 
-            batch_size=config.batch_size, drop_prob=config.drop_prob, lr=config.lr, mask_ratio=config.mask_ratio,
-            embed_dim=config.embed_dim, hidden_dim=config.hidden_dim, n_heads=config.n_heads, n_layers=config.n_layers,
-            notes=config.additional_notes, run_time="$(run_hours)h $(run_minutes)m", 
-            pt1_accuracy=acc_pt1, pt2_accuracy=acc_pt2)
+log_params(save_dir, config; 
+           gpu=gpu_info, 
+           run_time="$(run_hours)h $(run_minutes)m", 
+           pt1_accuracy=acc_pt1, 
+           pt2_accuracy=acc_pt2)
