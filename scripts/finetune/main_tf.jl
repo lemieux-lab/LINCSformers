@@ -61,8 +61,8 @@ opt = Flux.setup(Optimisers.Adam(config.lr), model)
 
 data_set = (X_train=X_train, ytrain=y_train, X_test=X_test, y_test=y_test, pca_train=X_pca_train, pca_test=X_pca_test)
 
-pt1_epochs = floor(0.1 * config.n_epochs)
-pt2_epochs = floor(0.9 * config.n_epochs)
+config.pt1_epochs = floor(0.1 * config.n_epochs)
+config.pt2_epochs = floor(0.9 * config.n_epochs) 
 
 # pt1_epochs = 1
 # pt2_epochs = 1
@@ -71,10 +71,10 @@ pt2_epochs = floor(0.9 * config.n_epochs)
 Optimisers.freeze!(opt.pretrained) 
 
 logs_pt1 = (train_losses=Float32[], test_losses=Float32[], preds=Int[], trues=Int[])
-train(model, opt, data_set, (epochs=pt1_epochs, batch_size=config.batch_size, loss=ce_loss, use_pca=use_pca, use_oversmpl=use_oversmpl, clsdict=clsdict, cls=cls, freq=config.cp_freq, save_dir=save_dir, pt="pt1"), logs_pt1)
+train(model, opt, data_set, (epochs=config.pt1_epochs, batch_size=config.batch_size, loss=ce_loss, use_pca=use_pca, use_oversmpl=use_oversmpl, clsdict=clsdict, cls=cls, freq=config.cp_freq, save_dir=save_dir, pt="pt1"), logs_pt1)
 
 acc_pt1 = sum(logs_pt1.preds .== logs_pt1.trues) / length(logs_pt1.trues)
-save_run(save_dir, model, pt1_epochs, train_indices, test_indices, logs_pt1.train_losses, logs_pt1.test_losses, logs_pt1.preds, logs_pt1.trues, prefix="pt1_")
+save_run(save_dir, model, config.pt1_epochs, train_indices, test_indices, logs_pt1.train_losses, logs_pt1.test_losses, logs_pt1.preds, logs_pt1.trues, prefix="pt1_")
 # println("saved pt1 at $save_dir")
 
 # pt2: gradient updates both transformer and classifier weights
@@ -82,10 +82,10 @@ Optimisers.thaw!(opt.pretrained)
 Optimisers.adjust!(opt, config.lr / 10) 
 
 logs_pt2 = (train_losses=Float32[], test_losses=Float32[], preds=Int[], trues=Int[])
-train(model, opt, data_set, (epochs=pt2_epochs, batch_size=config.batch_size, loss=ce_loss, use_pca=use_pca, use_oversmpl=use_oversmpl, clsdict=clsdict, cls=cls, freq=config.cp_freq, save_dir=save_dir, pt="pt2"), logs_pt2)
+train(model, opt, data_set, (epochs=config.pt2_epochs, batch_size=config.batch_size, loss=ce_loss, use_pca=use_pca, use_oversmpl=use_oversmpl, clsdict=clsdict, cls=cls, freq=config.cp_freq, save_dir=save_dir, pt="pt2"), logs_pt2)
 
 acc_pt2 = sum(logs_pt2.preds .== logs_pt2.trues) / length(logs_pt2.trues)
-save_run(save_dir, model, pt2_epochs, train_indices, test_indices, logs_pt2.train_losses, logs_pt2.test_losses, logs_pt2.preds, logs_pt2.trues, prefix="pt2_")
+save_run(save_dir, model, config.pt2_epochs, train_indices, test_indices, logs_pt2.train_losses, logs_pt2.test_losses, logs_pt2.preds, logs_pt2.trues, prefix="pt2_")
 # println("saved pt2 at $save_dir")
 
 # log

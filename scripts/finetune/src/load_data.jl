@@ -120,16 +120,41 @@ function dsplit(data::Lincs, config::Config)
     return X_train, X_test, y_train, y_test, train_indices, test_indices, n_genes, n_classifications, cidx_dict, cs, pca_info
 end
 
+# function get_pooled(m, x, x_pca, m_type)
+#     embedded = m.embedding(x)
+    
+#     if m_type == "rtf"
+#         encoded = m.pos_encoder(embedded)
+#     elseif m_type == "v1"
+#         processed_pca = m.use_pca_proj ? m.pca_proj(x_pca) : x_pca
+#         pca_reshaped = reshape(processed_pca, size(processed_pca, 1), 1, size(processed_pca, 2))
+#         combined = cat(pca_reshaped, embedded, dims=2)
+#         encoded = m.pos_encoder(combined)
+#     elseif m_type == "v2"
+#         pca_embedded = m.pca_proj(x_pca)
+#         pca_normed = m.pca_norm(pca_embedded)
+#         pca_reshaped = reshape(pca_normed, size(pca_normed, 1), 1, size(pca_normed, 2))
+#         combined = embedded .+ pca_reshaped
+#         encoded = m.pos_encoder(combined)
+#     end
+    
+#     encoded_dropped = m.pos_dropout(encoded)
+#     transformed = m.transformer(encoded_dropped)
+#     return dropdims(mean(transformed, dims=2), dims=2)
+# end
+
 function get_pooled(m, x, x_pca, m_type)
     embedded = m.embedding(x)
     
     if m_type == "rtf"
         encoded = m.pos_encoder(embedded)
     elseif m_type == "v1"
+        encoded_seq = m.pos_encoder(embedded) 
+        
         processed_pca = m.use_pca_proj ? m.pca_proj(x_pca) : x_pca
         pca_reshaped = reshape(processed_pca, size(processed_pca, 1), 1, size(processed_pca, 2))
-        combined = cat(pca_reshaped, embedded, dims=2)
-        encoded = m.pos_encoder(combined)
+        
+        encoded = cat(pca_reshaped, encoded_seq, dims=2) 
     elseif m_type == "v2"
         pca_embedded = m.pca_proj(x_pca)
         pca_normed = m.pca_norm(pca_embedded)

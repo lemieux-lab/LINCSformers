@@ -164,19 +164,38 @@ function FTModel(pt_model;
     return FTModel(pretrained, head)
 end
 
+# function (m::FTModel)(input, input_pca)
+#     embedded = m.pretrained.embedding(input)
+    
+#     if m.pretrained.use_pca_proj 
+#         processed_pca = m.pretrained.pca_proj(input_pca) 
+#     else 
+#         processed_pca = input_pca 
+#     end 
+#     pca_reshaped = reshape(processed_pca, size(processed_pca, 1), 1, size(processed_pca, 2)) 
+#     combined = cat(pca_reshaped, embedded, dims=2) 
+    
+#     encoded = m.pretrained.pos_encoder(combined)
+#     encoded_dropped = m.pretrained.pos_dropout(encoded)
+#     transformed = m.pretrained.transformer(encoded_dropped)
+#     pooled = dropdims(mean(transformed, dims=2), dims=2)
+#     return m.head(pooled)
+# end
+
 function (m::FTModel)(input, input_pca)
     embedded = m.pretrained.embedding(input)
+    encoded_seq = m.pretrained.pos_encoder(embedded) 
     
     if m.pretrained.use_pca_proj 
         processed_pca = m.pretrained.pca_proj(input_pca) 
     else 
         processed_pca = input_pca 
     end 
-    pca_reshaped = reshape(processed_pca, size(processed_pca, 1), 1, size(processed_pca, 2)) 
-    combined = cat(pca_reshaped, embedded, dims=2) 
     
-    encoded = m.pretrained.pos_encoder(combined)
-    encoded_dropped = m.pretrained.pos_dropout(encoded)
+    pca_reshaped = reshape(processed_pca, size(processed_pca, 1), 1, size(processed_pca, 2)) 
+    combined = cat(pca_reshaped, encoded_seq, dims=2) 
+    
+    encoded_dropped = m.pretrained.pos_dropout(combined)
     transformed = m.pretrained.transformer(encoded_dropped)
     pooled = dropdims(mean(transformed, dims=2), dims=2)
     return m.head(pooled)
