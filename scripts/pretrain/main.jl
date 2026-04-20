@@ -1,10 +1,14 @@
 # using Pkg
 # Pkg.activate("/home/golem/scratch/chans/lincsv4")
 # TODO: do aarch pkg in sbatch file, make sure ArgParse is in the pkg manager for this via interactive run on balrog first
-using Pkg
+# using Pkg
+# Pkg.activate("/home/golem/scratch/chans/lincsv4/aarch64")
 using DataFrames, Dates, StatsBase, JLD2, LincsProject
-using cuDNN
-using Flux, Random, ProgressBars, CUDA, Statistics, CairoMakie, LinearAlgebra, MultivariateStats
+# using cuDNN
+using CUDA
+# using LuxCUDA
+using Functors
+using Flux, Random, ProgressBars, Statistics, CairoMakie, LinearAlgebra, MultivariateStats
 
 include("src/params.jl")
 include("src/structs.jl")
@@ -17,31 +21,37 @@ args = load_args()
 kwargs = Dict(Symbol(k) => v for (k, v) in args)
 config = Config(; kwargs...)
 
-config = Config()
+# config = Config()
 
 mode_map = Dict("rtf" => :none, "v1" => :concat, "v2" => :add)
 config.pca_mode = mode_map[config.modeltype]
+
+# config.data_path = "data/lincs_trt_data.jld2"
 
 if haskey(kwargs, "dataset")
     config.data_path = "data/lincs_$(config.dataset)_data.jld2" # fyi trt refers to trt and untrt, untrt is untrt only
 end
 
+# config.batch_size = 64
+
 gpu_info = CUDA.name(device())
 if !haskey(kwargs, "batch_size")
-    if gpu_info == "NVIDIA GeForce GTX 1080 Ti"
+    if gpu_info ∈ ("NVIDIA GeForce GTX 1080 Ti", "NVIDIA GeForce RTX 4090")
         config.batch_size = 42
-    elseif gpu_info ∈ ("Tesla V100-SXM2-32GB", "NVIDIA RTX 6000 Ada Generation")
+    elseif gpu_info == "NVIDIA GH200 144G HBM3e MIG 1g.18gb"
+        config.batch_size = 64
+    elseif gpu_info ∈ ("Tesla V100-SXM2-32GB", "NVIDIA RTX A4500", "NVIDIA RTX 6000 Ada Generation")
         config.batch_size = 128
     elseif gpu_info == "NVIDIA GH200 144G HBM3e"
         config.batch_size = 500
-        config.lr *= 5
+        config.lr *= 3
     else
-        config.batch_size = 64 # incl "NVIDIA GH200 144G HBM3e MIG 1g.18gb"
+        config.batch_size = 64
     end
 end
 
 # wandb settings
-include("deps/build.jl")
+# include("deps/build.jl")
 using PyCall
 println("using pycall from: ", PyCall.python)
 timestamp = Dates.format(now(), "yyyy-mm-dd_HH-MM")
@@ -71,10 +81,10 @@ X_test_masked, y_test_masked = mask_input(X_test, config.mask_ratio, -100, MASK_
 raw_train = data_expr[:, train_indices]
 raw_test = data_expr[:, test_indices]
 
-pca_train_norm = fit(PCA, Float32.(raw_train); maxoutdim=config.embed_dim)
+pca_train_norm = fit(PCA, Float32.(raw_train); maxoutdim=config.embed_dim);
 if config.pca_mode != :none # this is the same thing as using predict(), y = P'(X-mu)
-    pgpu = gpu(MultivariateStats.projection(pca_train_norm)')
-    mgpu = gpu(MultivariateStats.mean(pca_train_norm))
+    pgpu = gpu(MultivariateStats.projection(pca_train_norm)');
+    mgpu = gpu(MultivariateStats.mean(pca_train_norm));
 else
     pgpu = nothing
     mgpu = nothing
@@ -89,21 +99,12 @@ model = Model(
     n_heads=config.n_heads,
     hidden_dim=config.hidden_dim, 
     dropout_prob=config.drop_prob,
-    pca_mode=config.pca_mode) |> gpu
-
-using cuDNN
-model = Model(
-    input_size=n_features, 
-    pca_dim=config.embed_dim, 
-    embed_dim=config.embed_dim,
-    n_layers=config.n_layers, 
-    n_classes=n_classes, 
-    n_heads=config.n_heads,
-    hidden_dim=config.hidden_dim, 
-    dropout_prob=config.drop_prob,
-    pca_mode=config.pca_mode) |> gpu
-
+    pca_mode=config.pca_mode)
+    
 opt = Flux.setup(Adam(config.lr), model)
+
+model = fmap(manual_gpu_transfer, model; exclude = x -> x isa Flux.Dropout || Functors.isleaf(x))
+opt = fmap(manual_gpu_transfer, opt; exclude = x -> x isa Flux.Dropout || Functors.isleaf(x))
 
 base_save_dir = joinpath("plots", config.dataset, config.modeltype)
 latest_run_dir, latest_cp_file, latest_epoch = find_latest_checkpoint(base_save_dir)
@@ -115,11 +116,13 @@ if latest_cp_file !== nothing && latest_epoch < config.n_epochs
     
     save_dir = latest_run_dir 
     start_epoch = latest_epoch + 1
-    cp_data = load(latest_cp_file)
 
+    cp_data = load(latest_cp_file)
     Flux.loadmodel!(model, cp_data["model_state"]) 
-    opt = cp_data["opt_state"] |> gpu
     
+    model = fmap(manual_gpu_transfer, model; exclude = x -> x isa Flux.Dropout || Functors.isleaf(x))
+    opt = fmap(manual_gpu_transfer, cp_data["opt_state"]; exclude = x -> x isa Flux.Dropout || Functors.isleaf(x))
+        
     train_losses = cp_data["train_losses"]
     test_losses = cp_data["test_losses"]
     test_rank_errors = cp_data["test_rank_errors"] 
@@ -145,9 +148,11 @@ end
 # raw_test_gpu = gpu(Float32.(raw_test))
 
 final_original_ranks, final_prediction_errors = Int[], Int[]
-
-for epoch in ProgressBar(1:config.n_epochs)
-    train_loss, _, _, _, _, _ = train_epoch(model, opt, X_train_masked, y_train_masked, raw_train, 
+freq = config.freq
+warmup_epochs = max(1, div(config.n_epochs, 10))
+for epoch in ProgressBar(start_epoch:config.n_epochs)
+    Optimisers.adjust!(opt, compute_lr(epoch, config.n_epochs, config.lr, warmup_epochs))
+    train_loss, _, _, _, _, _ = train_epoch(model, opt, X_train_masked, y_train_masked, raw_train,
                                             pgpu, mgpu, MASK_ID, n_classes, config.batch_size; 
                                             mode=:train, is_final_epoch=false)
     push!(train_losses, train_loss)

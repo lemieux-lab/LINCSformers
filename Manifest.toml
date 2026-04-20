@@ -2,7 +2,7 @@
 
 julia_version = "1.12.5"
 manifest_format = "2.0"
-project_hash = "a966965ac2ecbf77e9a772647d090bc53867106d"
+project_hash = "38a5c10911f72760beaa4deb360e29ee6923d2cb"
 
 [[deps.ADTypes]]
 git-tree-sha1 = "f7304359109c768cf32dc5fa2d371565bb63b68a"
@@ -1544,11 +1544,17 @@ git-tree-sha1 = "7c3ff68a904d0f7404e5d2f7f5bc667934d8d616"
 uuid = "6f286f6a-111f-5878-ab1e-185364afe411"
 version = "0.10.4"
 
+[[deps.NMacros]]
+deps = ["CairoMakie", "ProgressMeter"]
+git-tree-sha1 = "0fdb53fde1f33ff069b8986783d31b4c05e0cb69"
+uuid = "464b7726-eedd-4d86-8e6e-e9f5916276c1"
+version = "0.2.3"
+
 [[deps.NNlib]]
 deps = ["Adapt", "Atomix", "ChainRulesCore", "GPUArraysCore", "KernelAbstractions", "LinearAlgebra", "Random", "ScopedValues", "Statistics"]
-git-tree-sha1 = "6dc9ffc3a9931e6b988f913b49630d0fb986d0a8"
+git-tree-sha1 = "78cd28dbd5f03f99ccaba45c987107adcb61c115"
 uuid = "872c559c-99b0-510c-b3b7-b6c96a88d5cd"
-version = "0.9.33"
+version = "0.9.34"
 
     [deps.NNlib.extensions]
     NNlibAMDGPUExt = "AMDGPU"

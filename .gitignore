@@ -5,3 +5,4 @@ sandbox/
 .venv/
 .vscode/
 wandb/
+*.md

@@ -2,7 +2,7 @@
 
 julia_version = "1.12.5"
 manifest_format = "2.0"
-project_hash = "19eabb1d9cd3accdb613b344b7cc92ba1fd40ff7"
+project_hash = "0d9d4a5ee0e58abf9c0883179e3f12738b549c08"
 
 [[deps.ADTypes]]
 git-tree-sha1 = "f7304359109c768cf32dc5fa2d371565bb63b68a"
@@ -1310,6 +1310,12 @@ version = "0.3.29"
 [[deps.Logging]]
 uuid = "56ddb016-857b-54e1-b83d-db4d58db5568"
 version = "1.11.0"
+
+[[deps.LuxCUDA]]
+deps = ["CUDA", "Reexport", "cuDNN"]
+git-tree-sha1 = "891f5cc3bce7128bebf02b310d2458ae11388456"
+uuid = "d0bbae9a-e099-4d5b-a835-1c6931763bda"
+version = "0.3.5"
 
 [[deps.MLCore]]
 deps = ["DataAPI", "SimpleTraits", "Tables"]

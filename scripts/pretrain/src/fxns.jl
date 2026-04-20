@@ -1,4 +1,4 @@
-using Flux, CUDA, StatsBase, Statistics, Random, ArgParse
+using Flux, CUDA, StatsBase, Statistics, Random, ArgParse, Optimisers
 
 function load_args()
     s = ArgParseSettings()
@@ -72,9 +72,7 @@ function rank_genes(expr, medians)
         unsorted_expr_col = view(expr, :, j)
         @. normalized_col = unsorted_expr_col / medians
         sortperm!(sorted_ind_col, normalized_col, rev=true)
-        for i in 1:n
-            data_ranked[i, j] = sorted_ind_col[i]
-        end
+        data_ranked[:, j] .= sorted_ind_col
     end
     return data_ranked
 end
@@ -88,6 +86,15 @@ function split_data(X, ratio::Float64, y=nothing)
         return X[:, train_idx], X[:, test_idx], train_idx, test_idx 
     end
     return X[:, train_idx], y[:, train_idx], X[:, test_idx], y[:, test_idx], train_idx, test_idx
+end
+
+function compute_lr(epoch::Int, n_epochs::Int, base_lr::Float64, warmup_epochs::Int)
+    if epoch <= warmup_epochs
+        return base_lr * epoch / warmup_epochs
+    else
+        progress = (epoch - warmup_epochs) / (n_epochs - warmup_epochs)
+        return base_lr * 0.5 * (1.0 + cos(π * progress))
+    end
 end
 
 function mask_input(X::Matrix, mask_ratio::Float64, mask_val, mask_id, offset::Bool=false)
@@ -133,6 +140,8 @@ function train_epoch(model, opt, X_masked, y_masked, raw_data,
     mode == :train ? Flux.trainmode!(model) : Flux.testmode!(model)
     
     for start_idx in 1:batch_size:size(X_masked, 2)
+        # time = now()
+        # println("batch started at $time")
         end_idx = min(start_idx + batch_size - 1, size(X_masked, 2))
 
         x_batch = CuArray(X_masked[:, start_idx:end_idx]) 
@@ -140,8 +149,8 @@ function train_epoch(model, opt, X_masked, y_masked, raw_data,
         
         if pca_gpu !== nothing
             raw_batch = CuArray(raw_data[:, start_idx:end_idx])
-            x_raw_masked = (x_batch .!= MASK_ID) .* raw_batch # masks pca data accordingly
-            x_pca = pca_gpu * (x_raw_masked .- mean_gpu) # center and project data to pca
+            x_raw_masked = ifelse.(x_batch .== MASK_ID, mean_gpu, raw_batch)
+            x_pca = pca_gpu * (x_raw_masked .- mean_gpu)
         else
             x_pca = nothing
         end
@@ -153,7 +162,7 @@ function train_epoch(model, opt, X_masked, y_masked, raw_data,
             end
             Flux.update!(opt, model, grads[1])
             # l_val = masked_logitcrossentropy(model(x_batch, x_pca), y_batch, n_classes)
-            push!(epoch_losses, l_val[1])
+            push!(epoch_losses, l_val)
 
         else 
             # test
@@ -189,26 +198,37 @@ function train_epoch(model, opt, X_masked, y_masked, raw_data,
         end
     end
 
-    return mean(epoch_losses), mean(epoch_rank_errors), all_preds, all_trues, all_original_ranks, all_prediction_errors
+    rank_err = isempty(epoch_rank_errors) ? NaN32 : mean(Float32.(epoch_rank_errors))
+    return mean(epoch_losses), rank_err, all_preds, all_trues, all_original_ranks, all_prediction_errors
 end
 
-# since cuDNN is being phased out, need manual self-attention function
-import NNlib
+# # since cuDNN is being phased out, need manual self-attention function
+# import NNlib
 
-function manual_softmax(x::CuArray; dims=1)
-    max_x = maximum(x, dims=dims)
-    exp_x = exp.(x .- max_x)
-    return exp_x ./ sum(exp_x, dims=dims)
+# function manual_softmax(x::CuArray; dims=1)
+#     max_x = maximum(x, dims=dims)
+#     exp_x = exp.(x .- max_x)
+#     return exp_x ./ sum(exp_x, dims=dims)
+# end
+
+# function manual_logsoftmax(x::CuArray; dims=1)
+#     max_x = maximum(x, dims=dims)
+#     exp_x = exp.(x .- max_x)
+#     return (x .- max_x) .- log.(sum(exp_x, dims=dims))
+# end
+
+# NNlib.softmax(x::CuArray; dims=1) = manual_softmax(x; dims=dims)
+# NNlib.softmax!(y::CuArray, x::CuArray; dims=1) = (y .= manual_softmax(x; dims=dims))
+
+# NNlib.logsoftmax(x::CuArray; dims=1) = manual_logsoftmax(x; dims=dims)
+# NNlib.logsoftmax!(y::CuArray, x::CuArray; dims=1) = (y .= manual_logsoftmax(x; dims=dims))
+
+function manual_gpu_transfer(x)
+    if x isa Flux.Dropout
+        return Flux.Dropout(x.p; dims=x.dims, rng=CUDA.default_rng())
+    elseif x isa AbstractArray
+        return cu(x)
+    else
+        return x
+    end
 end
-
-function manual_logsoftmax(x::CuArray; dims=1)
-    max_x = maximum(x, dims=dims)
-    exp_x = exp.(x .- max_x)
-    return (x .- max_x) .- log.(sum(exp_x, dims=dims))
-end
-
-NNlib.softmax(x::CuArray; dims=1) = manual_softmax(x; dims=dims)
-NNlib.softmax!(y::CuArray, x::CuArray; dims=1) = (y .= manual_softmax(x; dims=dims))
-
-NNlib.logsoftmax(x::CuArray; dims=1) = manual_logsoftmax(x; dims=dims)
-NNlib.logsoftmax!(y::CuArray, x::CuArray; dims=1) = (y .= manual_logsoftmax(x; dims=dims))

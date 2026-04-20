@@ -5,7 +5,7 @@ Base.@kwdef mutable struct Config
 
     batch_size::Int = 128
     n_epochs::Int = 1
-    freq::Union{Int,Nothing} = 5
+    freq::Union{Int,Nothing} = nothing
 
     embed_dim::Int = 128
     drop_prob::Float64 = 0.1
