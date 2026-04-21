@@ -20,8 +20,8 @@ function train(model, opt, data, config, logs)
     for epoch in ProgressBar(1:epochs)
         println("epoch $epoch")
         is_last = (epoch == epochs)
-        # is_checkpt = !isnothing(freq) && (epoch % freq == 0 || is_last)
-        is_checkpt = (!isnothing(freq) && epoch % freq == 0) || is_last
+        is_checkpt = !isnothing(freq) && (epoch % freq == 0 || is_last)
+        # is_checkpt = (!isnothing(freq) && epoch % freq == 0) || is_last
 
         train_loss = train_epoch!(model, opt, X_train, ytrain, pca_train, loss, 
                                   use_oversmpl, clsdict, cls, use_pca, batch_size)
