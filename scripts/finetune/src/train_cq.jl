@@ -1,8 +1,16 @@
 using Flux, ProgressBars, Statistics
 
+function manual_logitcrossentropy(logits, y; dims=1)
+    max_logits = maximum(logits, dims=dims)
+    shifted = logits .- max_logits
+    log_sum_exp = log.(sum(exp.(shifted), dims=dims))
+    log_probs = shifted .- log_sum_exp
+    return -mean(sum(y .* log_probs, dims=dims))
+end
+
 function ce_loss(model, x, x_pca, y, use_pca)
     logits = use_pca ? model(x, x_pca) : model(x)
-    return Flux.logitcrossentropy(logits, y)
+    return manual_logitcrossentropy(logits, y)
 end
 
 function train(model, opt, data, config, logs)
@@ -101,12 +109,12 @@ function eval_epoch(model, X_test, y_test, pca_test, use_pca, batch_size, get_pr
     return mean(epoch_losses), epoch_preds, epoch_trues
 end
 
-# function manual_gpu_transfer(x)
-#     if x isa Flux.Dropout
-#         return Flux.Dropout(x.p; dims=x.dims, rng=CUDA.default_rng())
-#     elseif x isa AbstractArray
-#         return cu(x)
-#     else
-#         return x
-#     end
-# end
+function manual_gpu_transfer(x)
+    if x isa Flux.Dropout
+        return Flux.Dropout(x.p; dims=x.dims, rng=CUDA.default_rng())
+    elseif x isa AbstractArray
+        return cu(x)
+    else
+        return x
+    end
+end

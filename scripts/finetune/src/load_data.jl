@@ -69,10 +69,10 @@ end
 function get_labels(data::Matrix{Float32}, level::String)
     X = data
     if level == "lvl1"
-        mfc = load("../../../data/lincs_trt_inst.jld2")["mfc"]
+        mfc = load("/home/golem/scratch/chans/lincsv4/data/lincs_trt_inst.jld2")["mfc"]
         return X, mfc, 1:size(X, 2)
     elseif level == "lvl2"
-        pert_id = load("../../../data/lincs_trt_inst.jld2")["pert_id"]
+        pert_id = load("/home/golem/scratch/chans/lincsv4/data/lincs_trt_inst.jld2")["pert_id"]
         y = pert_id
         counts = countmap(y)
         valid_labels = Set(k for (k, v) in counts if 1000 < v < 20000) # 7k for testing, 1k for running

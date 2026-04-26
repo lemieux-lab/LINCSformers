@@ -6,10 +6,10 @@ Base.@kwdef mutable struct Config
 
     level::String = "lvl2"
     batch_size::Int = 128
-    n_epochs::Int = 5
-    pt1_epochs::Int = 2
-    pt2_epochs::Int = 8
-    cp_freq::Union{Int,Nothing} = nothing
+    n_epochs::Int = 300
+    pt1_epochs::Int = 25
+    pt2_epochs::Int = 275
+    cp_freq::Union{Int,Nothing} = 25
 
     embed_dim::Int = 128
     drop_prob::Float64 = 0.1

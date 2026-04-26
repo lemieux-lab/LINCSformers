@@ -4,7 +4,7 @@ using Pkg
 Pkg.activate("/home/golem/scratch/chans/lincsv4")
 Pkg.precompile()
 
-using LincsProject, JLD2, Flux, Optimisers, ProgressBars, Statistics, CUDA, Dates, cuDNN, StatsBase
+using LincsProject, JLD2, Flux, Optimisers, ProgressBars, Statistics, CUDA, Dates, cuDNN, StatsBase, Functors
 
 include("src/params.jl")
 include("src/train.jl")
@@ -52,17 +52,22 @@ mkpath(save_dir)
 # train
 start_time = now()
 
-data = load(config.data_path)["filtered_data"]
+# data = load(config.data_path)["filtered_data"]
+data = load("/home/golem/scratch/chans/lincsv4/data/data_expr.jld2")["data_expr"]
 X_train, X_test, y_train, y_test, train_indices, test_indices, 
     n_genes, n_classifications, clsdict, cls, pcainfo = dsplit(data, config)
 
-model, X_pca_train, X_pca_test = mstate(config, pcainfo, use_pca, n_classifications)
-opt = Flux.setup(Optimisers.Adam(config.lr), model)
+model, X_pca_train, X_pca_test = mstate(config, pcainfo, use_pca, n_classifications) |> gpu
+# model = fmap(manual_gpu_transfer, model; exclude = x -> x isa Flux.Dropout || Functors.isleaf(x))
+opt = Flux.setup(Optimisers.Adam(config.lr), model) |> gpu
+# opt = fmap(manual_gpu_transfer, opt; exclude = x -> x isa Flux.Dropout || Functors.isleaf(x))
 
 data_set = (X_train=X_train, ytrain=y_train, X_test=X_test, y_test=y_test, pca_train=X_pca_train, pca_test=X_pca_test)
 
-config.pt1_epochs = floor(0.1 * config.n_epochs)
-config.pt2_epochs = floor(0.9 * config.n_epochs) 
+# config.pt1_epochs = floor(0.1 * config.n_epochs)
+# config.pt2_epochs = floor(0.9 * config.n_epochs)
+# config.pt1_epochs = floor(Int, 0.1 * config.n_epochs)
+# config.pt2_epochs = floor(Int, 0.9 * config.n_epochs)
 
 # pt1_epochs = 1
 # pt2_epochs = 1

@@ -57,37 +57,38 @@ end
 
 Flux.@layer Transf
 
-function manual_softmax(x::AbstractArray; dims=1)
-    max_x = maximum(x, dims=dims)
-    exp_x = exp.(x .- max_x)
-    return exp_x ./ sum(exp_x, dims=dims)
-end
+# function manual_softmax(x::AbstractArray; dims=1)
+#     max_x = maximum(x, dims=dims)
+#     exp_x = exp.(x .- max_x)
+#     return exp_x ./ sum(exp_x, dims=dims)
+# end
 
-function manual_mha(mha::Flux.MultiHeadAttention, x::AbstractArray)
-    q = mha.q_proj(x)
-    k = mha.k_proj(x)
-    v = mha.v_proj(x)
+# function manual_mha(mha::Flux.MultiHeadAttention, x::AbstractArray)
+#     q = mha.q_proj(x)
+#     k = mha.k_proj(x)
+#     v = mha.v_proj(x)
 
-    embed_dim, seq_len, batch = size(q)
-    head_dim = embed_dim ÷ mha.nheads
-    scale = Float32(inv(sqrt(head_dim)))
+#     embed_dim, seq_len, batch = size(q)
+#     head_dim = embed_dim ÷ mha.nheads
+#     scale = Float32(inv(sqrt(head_dim)))
 
-    q3 = reshape(permutedims(reshape(q, head_dim, mha.nheads, seq_len, batch), (1,3,2,4)), head_dim, seq_len, mha.nheads*batch)
-    k3 = reshape(permutedims(reshape(k, head_dim, mha.nheads, seq_len, batch), (1,3,2,4)), head_dim, seq_len, mha.nheads*batch)
-    v3 = reshape(permutedims(reshape(v, head_dim, mha.nheads, seq_len, batch), (1,3,2,4)), head_dim, seq_len, mha.nheads*batch)
+#     q3 = reshape(permutedims(reshape(q, head_dim, mha.nheads, seq_len, batch), (1,3,2,4)), head_dim, seq_len, mha.nheads*batch)
+#     k3 = reshape(permutedims(reshape(k, head_dim, mha.nheads, seq_len, batch), (1,3,2,4)), head_dim, seq_len, mha.nheads*batch)
+#     v3 = reshape(permutedims(reshape(v, head_dim, mha.nheads, seq_len, batch), (1,3,2,4)), head_dim, seq_len, mha.nheads*batch)
 
-    scores = NNlib.batched_mul(NNlib.batched_adjoint(k3), q3) .* scale
-    α = manual_softmax(scores; dims=1)
-    α = mha.attn_drop(α)
+#     scores = NNlib.batched_mul(NNlib.batched_adjoint(k3), q3) .* scale
+#     α = manual_softmax(scores; dims=1)
+#     α = mha.attn_drop(α)
 
-    out3 = NNlib.batched_mul(v3, α)
-    out = reshape(permutedims(reshape(out3, head_dim, seq_len, mha.nheads, batch), (1,3,2,4)), embed_dim, seq_len, batch)
-    return mha.out_proj(out)
-end
+#     out3 = NNlib.batched_mul(v3, α)
+#     out = reshape(permutedims(reshape(out3, head_dim, seq_len, mha.nheads, batch), (1,3,2,4)), embed_dim, seq_len, batch)
+#     return mha.out_proj(out)
+# end
 
 function (tf::Transf)(input) # input shape: embed_dim × seq_len × batch_size
     normed = tf.att_norm(input)
-    atted = manual_mha(tf.mha, normed) # outputs a tuple (a, b)
+    # atted = tf.mha(tf.mha, normed)
+    atted = tf.mha(normed, normed, normed)[1]
 
     att_dropped = tf.att_dropout(atted)
     residualed = input + att_dropped

@@ -24,7 +24,7 @@ function (pe::PosEnc)(input::AbstractArray)
     return input .+ @view(pe.pe_matrix[:, 1:seq_len]) # adds positional encoding to input embeddings
 end
 
-### transformer
+
 struct Transf{A,D,N,M}
     mha::A
     att_dropout::D
@@ -39,7 +39,6 @@ function Transf(
     n_heads::Int, 
     dropout_prob::Float64
     )
-
     mha = Flux.MultiHeadAttention((embed_dim, embed_dim, embed_dim) => (embed_dim, embed_dim) => embed_dim, 
                                     nheads=n_heads, 
                                     dropout_prob=dropout_prob
@@ -58,77 +57,79 @@ end
 
 Flux.@layer Transf
 
-# function manual_softmax(x::AbstractArray; dims=1)
-#     max_x = maximum(x, dims=dims)
-#     exp_x = exp.(x .- max_x)
-#     return exp_x ./ sum(exp_x, dims=dims)
-# end
+function manual_softmax(x::AbstractArray; dims=1)
+    max_x = maximum(x, dims=dims)
+    exp_x = exp.(x .- max_x)
+    return exp_x ./ sum(exp_x, dims=dims)
+end
 
-# function manual_mha(mha::Flux.MultiHeadAttention, x::AbstractArray)
-#     q = mha.q_proj(x)
-#     k = mha.k_proj(x)
-#     v = mha.v_proj(x)
+function manual_mha(mha::Flux.MultiHeadAttention, x::AbstractArray)
+    q = mha.q_proj(x)
+    k = mha.k_proj(x)
+    v = mha.v_proj(x)
 
-#     embed_dim, seq_len, batch = size(q)
-#     head_dim = embed_dim ÷ mha.nheads
-#     scale = Float32(inv(sqrt(head_dim)))
+    embed_dim, seq_len, batch = size(q)
+    head_dim = embed_dim ÷ mha.nheads
+    scale = Float32(inv(sqrt(head_dim)))
 
-#     q3 = reshape(permutedims(reshape(q, head_dim, mha.nheads, seq_len, batch), (1,3,2,4)), head_dim, seq_len, mha.nheads*batch)
-#     k3 = reshape(permutedims(reshape(k, head_dim, mha.nheads, seq_len, batch), (1,3,2,4)), head_dim, seq_len, mha.nheads*batch)
-#     v3 = reshape(permutedims(reshape(v, head_dim, mha.nheads, seq_len, batch), (1,3,2,4)), head_dim, seq_len, mha.nheads*batch)
+    q3 = reshape(permutedims(reshape(q, head_dim, mha.nheads, seq_len, batch), (1,3,2,4)), head_dim, seq_len, mha.nheads*batch)
+    k3 = reshape(permutedims(reshape(k, head_dim, mha.nheads, seq_len, batch), (1,3,2,4)), head_dim, seq_len, mha.nheads*batch)
+    v3 = reshape(permutedims(reshape(v, head_dim, mha.nheads, seq_len, batch), (1,3,2,4)), head_dim, seq_len, mha.nheads*batch)
 
-#     scores = NNlib.batched_mul(NNlib.batched_adjoint(k3), q3) .* scale
-#     α = manual_softmax(scores; dims=1)
-#     α = mha.attn_drop(α)
+    scores = NNlib.batched_mul(NNlib.batched_adjoint(k3), q3) .* scale
+    α = manual_softmax(scores; dims=1)
+    α = mha.attn_drop(α)
 
-#     out3 = NNlib.batched_mul(v3, α)
-#     out = reshape(permutedims(reshape(out3, head_dim, seq_len, mha.nheads, batch), (1,3,2,4)), embed_dim, seq_len, batch)
-#     return mha.out_proj(out)
-# end
+    out3 = NNlib.batched_mul(v3, α)
+    out = reshape(permutedims(reshape(out3, head_dim, seq_len, mha.nheads, batch), (1,3,2,4)), embed_dim, seq_len, batch)
+    return mha.out_proj(out)
+end
 
 function (tf::Transf)(input) # input shape: embed_dim × seq_len × batch_size
     normed = tf.att_norm(input)
-    # atted = tf.mha(tf.mha, normed)
-    atted = tf.mha(normed, normed, normed)[1]
+    atted = manual_mha(tf.mha, normed) # outputs a tuple (a, b)
+
     att_dropped = tf.att_dropout(atted)
     residualed = input + att_dropped
+
     res_normed = tf.mlp_norm(residualed)
     embed_dim, seq_len, batch_size = size(res_normed)
     reshaped = reshape(res_normed, embed_dim, seq_len * batch_size) # dense layers expect 2D inputs
+    
     mlp_out = tf.mlp(reshaped)
     mlp_out_reshaped = reshape(mlp_out, embed_dim, seq_len, batch_size)
     tf_output = residualed + mlp_out_reshaped
+
     return tf_output
 end
 
-### full model as << ranked data --> token embedding --> position embedding --> transformer --> classifier head >>
-struct Model{E,J,P,D,T,C}
+
+struct Model{E,J,N,P,D,T,C}
     embedding::E
     pca_proj::J
+    pca_norm::N
+    # cls_token::L
     pos_encoder::P
     pos_dropout::D
     transformer::T
     classifier::C
-    use_pca_proj::Bool 
 end
-
-Flux.@layer Model
-    # [trainable = (embedding, transformer, classifier)] ??
 
 function Model(;
     input_size::Int,
-    pca_dim::Int, 
+    pca_dim::Int,
     embed_dim::Int,
     n_layers::Int,
     n_classes::Int,
     n_heads::Int,
     hidden_dim::Int,
-    dropout_prob::Float64,
-    use_pca_proj::Bool
+    dropout_prob::Float64
     )
     embedding = Flux.Embedding(input_size => embed_dim)
-    pca_proj = Flux.Dense(pca_dim => embed_dim) 
-    pos_encoder = PosEnc(embed_dim, input_size + 1)
+    pca_proj = Flux.Dense(pca_dim => embed_dim)
+    pca_norm = Flux.LayerNorm(embed_dim)
+    # cls_token = Flux.Embedding(1 => embed_dim)
+    pos_encoder = PosEnc(embed_dim, input_size)
     pos_dropout = Flux.Dropout(dropout_prob)
     transformer = Flux.Chain(
         [Transf(embed_dim, hidden_dim; n_heads, dropout_prob) for _ in 1:n_layers]...
@@ -138,28 +139,39 @@ function Model(;
         Flux.LayerNorm(embed_dim),
         Flux.Dense(embed_dim => n_classes)
         )
-    return Model(embedding, pca_proj, pos_encoder, pos_dropout, transformer, classifier, use_pca_proj) 
+    return Model(embedding, pca_proj, pca_norm, pos_encoder, pos_dropout, transformer, classifier)
 end
 
-function (model::Model)(input, input_pca)
-    embedded = model.embedding(input)
-    encoded_seq = model.pos_encoder(embedded) 
+Flux.@layer Model
 
-    if model.use_pca_proj 
-        processed_pca = model.pca_proj(input_pca) 
-    else 
-        processed_pca = input_pca 
-    end 
+function (model::Model)(input, input_pca) # input: n,b input_pca: p,b
+    embedded = model.embedding(input) # e,n,b
+    pca_embedded = model.pca_proj(input_pca) # e,b
+    # cls_embedded = model.cls_token.weight # e,1
 
-    pca_reshaped = reshape(processed_pca, size(processed_pca, 1), 1, size(processed_pca, 2)) 
-    combined = cat(pca_reshaped, encoded_seq, dims=2) 
+    # hybrid_emb = pca_embedded .+ cls_embedded # e,b
+    # hybrid_reshaped = reshape(hybrid_emb, size(hybrid_emb, 1), 1, size(hybrid_emb, 2)) # e,1,b
 
-    encoded_dropped = model.pos_dropout(combined) 
-    transformed = model.transformer(encoded_dropped)
+    # pca_reshaped = reshape(pca_embedded, size(pca_embedded, 1), 1, size(pca_embedded, 2))
+    # combined = cat(hybrid_reshaped, embedded, dims=2) # e,n+1,b
+
+    pca_normed = model.pca_norm(pca_embedded)
+
+    pca_reshaped = reshape(pca_normed, size(pca_normed, 1), 1, size(pca_normed, 2)) # e,1,b
+    # pca_reshaped = reshape(pca_embedded, size(pca_embedded, 1), 1, size(pca_embedded, 2)) # e,1,b
+    combined = embedded .+ pca_reshaped # e,n,b
+
+    encoded = model.pos_encoder(combined) # e,n+1,b
+    encoded_dropped = model.pos_dropout(encoded) # e,n+1,b
+
+    transformed = model.transformer(encoded_dropped) # e,n+1,b
+
     # cls = transformed[:,1,:]
     # logits_output = model.classifier(cls)
-    logits_output = model.classifier(transformed)
-    return logits_output[:,2:end,:]
+
+    logits_output = model.classifier(transformed) # n,n+1,b
+    
+    return logits_output
 end
 
 
@@ -172,59 +184,40 @@ struct FTModel{P,H}
 end
 
 Flux.@layer FTModel
+
 function FTModel(pt_model; 
     embed_dim::Int, 
     hidden_dim::Int, 
     n_classifications::Int
     )
+    
     pretrained = (
         embedding = pt_model.embedding,
         pca_proj = pt_model.pca_proj,
-        use_pca_proj = pt_model.use_pca_proj, 
+        pca_norm = pt_model.pca_norm,
         pos_encoder = pt_model.pos_encoder,
         pos_dropout = pt_model.pos_dropout,
         transformer = pt_model.transformer
     )
+    
     head = Flux.Chain(
         Flux.Dense(embed_dim => hidden_dim, gelu),
         Flux.Dropout(config.drop_prob),
         Flux.Dense(hidden_dim => n_classifications)
     )
+    
     return FTModel(pretrained, head)
 end
 
-# function (m::FTModel)(input, input_pca)
-#     embedded = m.pretrained.embedding(input)
-    
-#     if m.pretrained.use_pca_proj 
-#         processed_pca = m.pretrained.pca_proj(input_pca) 
-#     else 
-#         processed_pca = input_pca 
-#     end 
-#     pca_reshaped = reshape(processed_pca, size(processed_pca, 1), 1, size(processed_pca, 2)) 
-#     combined = cat(pca_reshaped, embedded, dims=2) 
-    
-#     encoded = m.pretrained.pos_encoder(combined)
-#     encoded_dropped = m.pretrained.pos_dropout(encoded)
-#     transformed = m.pretrained.transformer(encoded_dropped)
-#     pooled = dropdims(mean(transformed, dims=2), dims=2)
-#     return m.head(pooled)
-# end
-
 function (m::FTModel)(input, input_pca)
     embedded = m.pretrained.embedding(input)
-    encoded_seq = m.pretrained.pos_encoder(embedded) 
+    pca_embedded = m.pretrained.pca_proj(input_pca)
+    pca_normed = m.pretrained.pca_norm(pca_embedded)
     
-    if m.pretrained.use_pca_proj 
-        processed_pca = m.pretrained.pca_proj(input_pca) 
-    else 
-        processed_pca = input_pca 
-    end 
-    
-    pca_reshaped = reshape(processed_pca, size(processed_pca, 1), 1, size(processed_pca, 2)) 
-    combined = cat(pca_reshaped, encoded_seq, dims=2) 
-    
-    encoded_dropped = m.pretrained.pos_dropout(combined)
+    pca_reshaped = reshape(pca_normed, size(pca_normed, 1), 1, size(pca_normed, 2)) 
+    combined = embedded .+ pca_reshaped 
+    encoded = m.pretrained.pos_encoder(combined)
+    encoded_dropped = m.pretrained.pos_dropout(encoded)
     transformed = m.pretrained.transformer(encoded_dropped)
     pooled = dropdims(mean(transformed, dims=2), dims=2)
     return m.head(pooled)
